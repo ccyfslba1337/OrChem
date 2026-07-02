@@ -1,7 +1,7 @@
 // ==================== SYNTHESIS ENGINE (Client) ====================
 
 class SynthesisEngine {
-  constructor(apiEndpoint = "http://localhost:18002/synthesize") {
+  constructor(apiEndpoint = "https://orchem-api.onrender.com/synthesize") {
     this.apiEndpoint = apiEndpoint;
   }
 
