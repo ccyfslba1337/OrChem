@@ -807,11 +807,34 @@ class Molecule {
         } else if (fg === 'CHO') {
           toAdd.push({ parentId: id, type: 'CO', el: 'O', bondType: 'double' });
         } else if (fg === 'Ph') {
+<<<<<<< HEAD
           // Phenyl: create 6-carbon ring and attach
           const ring = [];
           for (let i = 0; i < 6; i++) ring.push(m.addAtom(0, 0, 'C').id);
           for (let i = 0; i < 6; i++) m.addBond(ring[i], ring[(i + 1) % 6], i % 2 === 0 ? 'double' : 'single');
           m.addBond(id, ring[0], 'single');
+=======
+          // Check if ring atoms already exist (added by addFG) or need creation (legacy data)
+          const nbrs = m.getNeighbors(id);
+          let hasRing = false;
+          for (const nb of nbrs) {
+            const na = m.atoms.get(nb);
+            if (na && na.el === 'C') {
+              // Check if this C is part of a 6-cycle
+              const rings = m.findRings();
+              if (rings.some(r => r.length === 6 && r.includes(nb))) {
+                hasRing = true; break;
+              }
+            }
+          }
+          if (!hasRing) {
+            // Legacy data: create the ring atoms
+            const ring = [];
+            for (let i = 0; i < 6; i++) ring.push(m.addAtom(0, 0, 'C').id);
+            for (let i = 0; i < 6; i++) m.addBond(ring[i], ring[(i + 1) % 6], i % 2 === 0 ? 'double' : 'single');
+            m.addBond(id, ring[0], 'single');
+          }
+>>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
         }
       }
       // Clear fgs after expansion (avoid double-expansion)

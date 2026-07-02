@@ -269,9 +269,18 @@ class App {
         if (this.renderer2D.selFgAtomId !== null && this.renderer2D.selFgIndex !== null) {
           const a = this.mol.atoms.get(this.renderer2D.selFgAtomId);
           if (a && a.fgs[this.renderer2D.selFgIndex] !== undefined) {
+<<<<<<< HEAD
             a.fgs.splice(this.renderer2D.selFgIndex, 1);
             this.renderer2D.selFgAtomId = null;
             this.renderer2D.selFgIndex = null;
+=======
+            const fg = a.fgs[this.renderer2D.selFgIndex];
+            a.fgs.splice(this.renderer2D.selFgIndex, 1);
+            this.renderer2D.selFgAtomId = null;
+            this.renderer2D.selFgIndex = null;
+            // Ph: also remove the 6 ring atoms
+            if (fg === 'Ph') this._removePhRing(a.id);
+>>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
             this.saveState(); this.renderAll(); this.updateInfoPanel();
             return;
           }
@@ -279,7 +288,13 @@ class App {
         if (this.selId !== null) {
           const a = this.mol.atoms.get(this.selId);
           if (a && a.fgs.length > 0) {
+<<<<<<< HEAD
             a.fgs.pop();
+=======
+            const fg = a.fgs.pop();
+            // Ph: also remove the 6 ring atoms
+            if (fg === 'Ph') this._removePhRing(this.selId);
+>>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
           } else {
             this.mol.removeAtom(this.selId);
             this.selId = null; this.hoverId = null;
@@ -302,13 +317,78 @@ class App {
 
   addFG(atomId, fg) {
     const a = this.mol.atoms.get(atomId);
+<<<<<<< HEAD
     if (!a || a.fgs.includes(fg)) return;
+=======
+    if (!a) return;
+>>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
     const c = FG_CONTRIB[fg];
     if (!c) return;
     if (this.mol.getOccupiedValence(atomId) + c.v > (VALENCES[a.el] || 4)) {
       this.showToast('该原子价态已满');
       return;
     }
+<<<<<<< HEAD
+=======
+
+    // Special handling for Ph: create actual benzene ring attached to the atom
+    if (fg === 'Ph') {
+      if (a.fgs.includes('Ph')) return;
+      // Compute free (stub) direction away from existing neighbors
+      const nbrs = this.mol.getNeighbors(atomId);
+      const usedAngles = [];
+      for (const nb of nbrs) {
+        const na = this.mol.atoms.get(nb);
+        if (na) usedAngles.push(Math.atan2(na.y - a.y, na.x - a.x));
+      }
+      let stubAngle;
+      if (usedAngles.length === 0) {
+        stubAngle = -Math.PI / 2; // upward
+      } else {
+        usedAngles.sort((x, y) => x - y);
+        let maxGap = 0, gapStart = usedAngles[0];
+        for (let i = 0; i < usedAngles.length; i++) {
+          const j = (i + 1) % usedAngles.length;
+          let gap = usedAngles[j] - usedAngles[i];
+          if (i === usedAngles.length - 1) gap = usedAngles[0] + 2 * Math.PI - usedAngles[i];
+          if (gap > maxGap) { maxGap = gap; gapStart = usedAngles[i]; }
+        }
+        stubAngle = gapStart + maxGap / 2;
+      }
+
+      // Build a benzene ring extending outward from the atom
+      const R = 48; // match placeFreeFG radius
+      const sA = stubAngle;
+      // Center of the hexagon is 2×R away from the parent atom along stubAngle
+      const cx = a.x + 2 * R * Math.cos(sA);
+      const cy = a.y + 2 * R * Math.sin(sA);
+      // Vertex 0 (attachment point) is at distance R from parent
+      // Remaining vertices go clockwise around the center
+      const ringAtoms = [];
+      for (let i = 0; i < 6; i++) {
+        const ang = sA + Math.PI + (Math.PI / 3) * i;
+        ringAtoms.push(this.mol.addAtom(
+          cx + R * Math.cos(ang),
+          cy + R * Math.sin(ang),
+          'C'
+        ));
+      }
+      // Connect ring with alternating bonds
+      for (let i = 0; i < 6; i++) {
+        this.mol.addBond(ringAtoms[i].id, ringAtoms[(i + 1) % 6].id,
+          i % 2 === 0 ? 'double' : 'single');
+      }
+      // Connect parent to vertex 0
+      this.mol.addBond(atomId, ringAtoms[0].id, 'single');
+      // Mark parent atom with Ph flag for valence tracking & identification
+      // (actual atoms handle rendering; fgs flag for identification)
+      if (!a.fgs.includes('Ph')) a.fgs.push('Ph');
+      this.saveState(); this.updateInfoPanel(); this.renderAll();
+      return;
+    }
+
+    if (a.fgs.includes(fg)) return;
+>>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
     a.fgs.push(fg);
     this.saveState(); this.updateInfoPanel(); this.renderAll();
   }
@@ -338,6 +418,26 @@ class App {
     this.saveState(); this.renderAll(); this.updateInfoPanel();
   }
 
+<<<<<<< HEAD
+=======
+  _removePhRing(parentId) {
+    // Find the 6-carbon benzene ring attached to parentId
+    const nbrs = this.mol.getNeighbors(parentId);
+    const allRings = this.mol.findRings();
+    for (const nb of nbrs) {
+      const na = this.mol.atoms.get(nb);
+      if (!na || na.el !== 'C') continue;
+      for (const cycle of allRings) {
+        if (cycle.length === 6 && cycle.includes(nb)) {
+          // Remove all atoms in this cycle
+          for (const id of cycle) this.mol.removeAtom(id);
+          return;
+        }
+      }
+    }
+  }
+
+>>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
   autoFillH() {
     // Remove all existing explicit H atoms first
     const toRemove = [];
@@ -494,7 +594,10 @@ class App {
       this.saveState(); this.renderAll(); this.updateInfoPanel();
       this.showToast('结构已规范化');
     });
+<<<<<<< HEAD
     document.getElementById('btnAutoH').addEventListener('click', () => this.autoFillH());
+=======
+>>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
     document.getElementById('btnSynth').addEventListener('click', () => this.showSynthesis());
   }
 

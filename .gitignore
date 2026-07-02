@@ -1,0 +1,17 @@
+# Python cache
+__pycache__/
+
+# Node
+node_modules/
+dist/
+
+# WorkBuddy internal
+.workbuddy/
+
+# Temporary files generated during development
+git_commit.bat
+git_push.js
+git_log.txt
+git_progress.txt
+test_out.txt
+debug_salicylic.py
