@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OrganicChem Builder - 有机化学分子构建器</title>
+
+<!-- External dependencies -->
+<script src="js/three.min.js"></script>
+
+<!-- Styles -->
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">原子 / 元素</div>
+    <div class="tool-group" id="elementTools">
+      <button class="btn-tool active" data-tool="C">C</button>
+      <button class="btn-tool" data-tool="O">O</button>
+      <button class="btn-tool" data-tool="N">N</button>
+      <button class="btn-tool" data-tool="S">S</button>
+      <button class="btn-tool" data-tool="F">F</button>
+      <button class="btn-tool" data-tool="Cl">Cl</button>
+      <button class="btn-tool" data-tool="Br">Br</button>
+      <button class="btn-tool" data-tool="I">I</button>
+    </div>
+    <div class="divider"></div>
+    <div class="sidebar-header">化学键</div>
+    <div class="tool-group" id="bondTools">
+      <button class="btn-tool bond-tool" data-tool="bond-single">━</button>
+      <button class="btn-tool bond-tool" data-tool="bond-double">═</button>
+      <button class="btn-tool bond-tool" data-tool="bond-triple">≡</button>
+    </div>
+    <div class="divider"></div>
+    <div class="sidebar-header">官能团</div>
+    <div class="tool-group" id="fgTools">
+      <button class="btn-tool fg" data-tool="fg-OH">-OH</button>
+      <button class="btn-tool fg" data-tool="fg-CHO">-CHO</button>
+      <button class="btn-tool fg" data-tool="fg-COOH">-COOH</button>
+      <button class="btn-tool fg" data-tool="fg-NH2">-NH₂</button>
+      <button class="btn-tool fg" data-tool="fg-NO2">-NO₂</button>
+      <button class="btn-tool fg" data-tool="fg-CN">-CN</button>
+      <button class="btn-tool fg" data-tool="fg-CO">-CO-</button>
+      <button class="btn-tool fg" data-tool="fg-Ph">-Ph</button>
+    </div>
+    <div class="divider"></div>
+    <div class="sidebar-header">操作</div>
+    <button class="btn-action" id="btnUndo">↩ 撤销</button>
+    <button class="btn-action" id="btnRedo">↪ 重做</button>
+    <button class="btn-action danger" id="btnErase">✕ 擦除模式</button>
+    <button class="btn-action danger" id="btnClear">🗑 清空画布</button>
+    <div class="divider"></div>
+    <button class="btn-action primary" id="btnNormalize">⊞ 规范结构</button>
+    <button class="btn-action" id="btnAutoH" style="background:#10b981;color:#fff">🔬 自动补氢</button>
+    <button class="btn-synth" id="btnSynth" disabled>⚗ 合成路径推断</button>
+  </aside>
+
+  <!-- Main Canvas Area -->
+  <main class="canvas-area light-bg" id="canvasArea">
+    <!-- 3D View -->
+    <div class="view3d active" id="view3D"></div>
+    <!-- 2D Editor -->
+    <div class="view2d" id="view2D"><canvas id="editCanvas"></canvas></div>
+
+    <div class="canvas-hint" id="canvasHint">
+      点击放置<kbd>C</kbd>原子 · 拖拽连接化学键<br>选中官能团后点击原子添加
+    </div>
+
+    <!-- View toggle -->
+    <div class="view-toggle" id="viewToggle">
+      <button class="active" data-view="3d-ball" title="球棍模型 (3D)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="2.5"/><line x1="8.5" y1="7.5" x2="16" y2="16"/></svg>
+        <span>球棍</span>
+      </button>
+      <button data-view="3d-space" title="空间填充模型 (3D)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="17" r="3.5"/><circle cx="17" cy="17" r="2"/></svg>
+        <span>填充</span>
+      </button>
+      <button data-view="2d" title="键线式编辑器">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4,18 8,14 10,16 14,10 16,12 20,6"/></svg>
+        <span>编辑</span>
+      </button>
+    </div>
+
+    <!-- Settings -->
+    <button class="settings-btn" id="settingsBtn" title="显示设置">⚙</button>
+    <div class="settings-panel" id="settingsPanel">
+      <div class="settings-title">3D 显示设置</div>
+      <label><input type="radio" name="quality" value="high" checked> 高质量（平滑球体）</label>
+      <label><input type="radio" name="quality" value="low"> 低质量（性能优先）</label>
+      <div class="settings-title" style="margin-top:10px">键线式显示设置</div>
+      <label><input type="checkbox" id="showHydrogens" checked> 3D中显示氢原子</label>
+      <label><input type="checkbox" id="showLabels"> 3D中显示元素符号</label>
+    </div>
+  </main>
+
+  <!-- Info Panel -->
+  <aside class="info-panel" id="infoPanel">
+    <div class="panel-section">
+      <div class="panel-title">分子结构</div>
+      <div class="thumbnail-wrap"><canvas id="thumbCanvas" width="260" height="140"></canvas></div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-title">基本信息</div>
+      <div class="prop-row"><span class="prop-label">化学式</span><span class="prop-value" id="infoFormula">—</span></div>
+      <div class="prop-row"><span class="prop-label">摩尔质量</span><span class="prop-value" id="infoMass">—</span></div>
+      <div class="prop-row"><span class="prop-label">原子数</span><span class="prop-value" id="infoAtomCount">—</span></div>
+      <div class="prop-row"><span class="prop-label">不饱和度</span><span class="prop-value" id="infoUnsaturation">—</span></div>
+      <div class="prop-row"><span class="prop-label">重原子数</span><span class="prop-value" id="infoHeavy">—</span></div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-title">识别官能团</div>
+      <div id="infoFGs" style="font-size:12px;color:var(--text2)">—</div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-title">快捷模板</div>
+      <div class="template-row" id="templateBtns">
+        <button class="btn-action" data-template="ethanol">乙醇</button>
+        <button class="btn-action" data-template="acetic_acid">乙酸</button>
+        <button class="btn-action" data-template="ethyl_acetate">乙酸乙酯</button>
+        <button class="btn-action" data-template="benzene">苯</button>
+        <button class="btn-action" data-template="acetone">丙酮</button>
+        <button class="btn-action" data-template="phenol">苯酚</button>
+        <button class="btn-action" data-template="glucose">葡萄糖</button>
+        <button class="btn-action" data-template="alanine">丙氨酸</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Application scripts (load order matters) -->
+<script src="js/molecule.js"></script>
+<script src="js/synthesis.js"></script>
+<script src="js/skeletal.js"></script>
+<script src="js/renderer.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
