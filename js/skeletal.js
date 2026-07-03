@@ -641,10 +641,7 @@ class SkeletalFormula {
       for (let fi = 0; fi < a.fgs.length; fi++) {
         const fg = a.fgs[fi];
         if (fg === 'CO') continue; // carbonyl =O is drawn as a real bond in _drawCarbonyls
-<<<<<<< HEAD
-=======
         if (fg === 'Ph') continue; // Ph is drawn as actual ring atoms, not a label
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
         const label = FG_NAMES[fg] || fg;
 
         const ox = x + ndx * 15;

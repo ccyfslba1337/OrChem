@@ -269,18 +269,12 @@ class App {
         if (this.renderer2D.selFgAtomId !== null && this.renderer2D.selFgIndex !== null) {
           const a = this.mol.atoms.get(this.renderer2D.selFgAtomId);
           if (a && a.fgs[this.renderer2D.selFgIndex] !== undefined) {
-<<<<<<< HEAD
-            a.fgs.splice(this.renderer2D.selFgIndex, 1);
-            this.renderer2D.selFgAtomId = null;
-            this.renderer2D.selFgIndex = null;
-=======
             const fg = a.fgs[this.renderer2D.selFgIndex];
             a.fgs.splice(this.renderer2D.selFgIndex, 1);
             this.renderer2D.selFgAtomId = null;
             this.renderer2D.selFgIndex = null;
             // Ph: also remove the 6 ring atoms
             if (fg === 'Ph') this._removePhRing(a.id);
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
             this.saveState(); this.renderAll(); this.updateInfoPanel();
             return;
           }
@@ -288,13 +282,9 @@ class App {
         if (this.selId !== null) {
           const a = this.mol.atoms.get(this.selId);
           if (a && a.fgs.length > 0) {
-<<<<<<< HEAD
-            a.fgs.pop();
-=======
             const fg = a.fgs.pop();
             // Ph: also remove the 6 ring atoms
             if (fg === 'Ph') this._removePhRing(this.selId);
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
           } else {
             this.mol.removeAtom(this.selId);
             this.selId = null; this.hoverId = null;
@@ -317,19 +307,13 @@ class App {
 
   addFG(atomId, fg) {
     const a = this.mol.atoms.get(atomId);
-<<<<<<< HEAD
-    if (!a || a.fgs.includes(fg)) return;
-=======
     if (!a) return;
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
     const c = FG_CONTRIB[fg];
     if (!c) return;
     if (this.mol.getOccupiedValence(atomId) + c.v > (VALENCES[a.el] || 4)) {
       this.showToast('该原子价态已满');
       return;
     }
-<<<<<<< HEAD
-=======
 
     // Special handling for Ph: create actual benzene ring attached to the atom
     if (fg === 'Ph') {
@@ -388,7 +372,6 @@ class App {
     }
 
     if (a.fgs.includes(fg)) return;
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
     a.fgs.push(fg);
     this.saveState(); this.updateInfoPanel(); this.renderAll();
   }
@@ -418,8 +401,6 @@ class App {
     this.saveState(); this.renderAll(); this.updateInfoPanel();
   }
 
-<<<<<<< HEAD
-=======
   _removePhRing(parentId) {
     // Find the 6-carbon benzene ring attached to parentId
     const nbrs = this.mol.getNeighbors(parentId);
@@ -437,7 +418,6 @@ class App {
     }
   }
 
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
   autoFillH() {
     // Remove all existing explicit H atoms first
     const toRemove = [];
@@ -594,10 +574,6 @@ class App {
       this.saveState(); this.renderAll(); this.updateInfoPanel();
       this.showToast('结构已规范化');
     });
-<<<<<<< HEAD
-    document.getElementById('btnAutoH').addEventListener('click', () => this.autoFillH());
-=======
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
     document.getElementById('btnSynth').addEventListener('click', () => this.showSynthesis());
   }
 

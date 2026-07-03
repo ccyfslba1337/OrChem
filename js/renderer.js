@@ -718,24 +718,8 @@ class Renderer2D {
         return { pos: { x: ox, y: oy }, subAtoms, el: 'N' };
       },
       Ph: () => {
-<<<<<<< HEAD
-        // Draw small phenyl icon: a regular hexagon
-        this._drawBondLine(atomX, atomY, ox, oy, 'single', hl);
-        const R = this.fgAtomR * 1.2;
-        ctx.strokeStyle = hl || '#2d3436';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let i = 0; i < 6; i++) {
-          const a = Math.PI * 2 / 6 * i;
-          const px = ox + R * Math.cos(a), py = oy + R * Math.sin(a);
-          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-        }
-        ctx.closePath(); ctx.stroke();
-        return { pos: { x: ox, y: oy }, subAtoms: [], el: 'Ph' };
-=======
         // Ph is now rendered as actual ring atoms (created by addFG). Skip all drawing.
         return { pos: { x: atomX, y: atomY }, subAtoms: [], el: 'Ph' };
->>>>>>> de6fd6c (v1.0: OrChem molecular editor with 2D/3D rendering, functional groups, synthesis inference)
       },
     };
 
