@@ -28,6 +28,8 @@ class SynthesisEngine {
 
   static smilesToMolecule(smiles) {
     if (!smiles) return new Molecule();
-    return Molecule.fromSmiles(smiles.replace(/\./g, ""));
+    const mol = Molecule.fromSmiles(smiles.replace(/\./g, ""));
+    mol.kekulize();
+    return mol;
   }
 }

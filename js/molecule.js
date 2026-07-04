@@ -102,6 +102,11 @@ class Molecule {
     return b ? b.type : null;
   }
 
+  setBondType(aId, bId, type) {
+    const b = this.getBond(aId, bId);
+    if (b) b.type = type;
+  }
+
   getDegree(atomId) {
     return this.bonds.filter(b => b.has(atomId)).length;
   }
@@ -301,39 +306,83 @@ class Molecule {
   }
 
   // Detect all cycles (rings) in the molecule
+  // Detect all minimal cycles (SSSR - Smallest Set of Smallest Rings)
   findRings() {
-    const visited = new Map(); // node -> depth in DFS
-    const parent = new Map();
     const rings = [];
-    const dfs = (node, depth) => {
-      visited.set(node, depth);
-      for (const nb of this.getNeighbors(node)) {
-        if (nb === parent.get(node)) continue;
-        if (visited.has(nb)) {
-          // Back-edge found — reconstruct ring
-          const cycle = [nb];
-          let cur = node;
-          while (cur !== nb) {
-            if (!cur) break;
-            cycle.push(cur);
-            cur = parent.get(cur);
-          }
-          if (cycle.length >= 3 && cycle.length <= 10) {
-            const key = [...cycle].sort().join(',');
-            if (!rings.some(r => [...r].sort().join(',') === key)) {
-              rings.push(cycle);
+    const MAX_RING = 8;
+
+    for (const [startId] of this.atoms) {
+      const queue = [[startId]];
+      while (queue.length > 0) {
+        const path = queue.shift();
+        const cur = path[path.length - 1];
+        if (path.length > MAX_RING) continue;
+
+        for (const nb of this.getNeighbors(cur)) {
+          if (path.length > 1 && nb === path[path.length - 2]) continue;
+          if (path.includes(nb)) {
+            const idx = path.indexOf(nb);
+            const cycle = path.slice(idx);
+            if (cycle.length >= 3 && cycle.length <= MAX_RING) {
+              const key = [...cycle].sort().join(',');
+              if (!rings.some(r => r.key === key)) {
+                rings.push({ key, cycle });
+              }
             }
+          } else {
+            queue.push([...path, nb]);
           }
-        } else {
-          parent.set(nb, node);
-          dfs(nb, depth + 1);
         }
       }
-    };
-    for (const [id] of this.atoms) {
-      if (!visited.has(id)) dfs(id, 0);
     }
-    return rings;
+
+    // Filter out pseudo-rings that have chords (cross-bonds)
+    const minimalRings = [];
+    for (const r of rings) {
+      const cycle = r.cycle;
+      let hasChord = false;
+      for (let i = 0; i < cycle.length; i++) {
+        for (let j = i + 2; j < cycle.length; j++) {
+          if (i === 0 && j === cycle.length - 1) continue;
+          if (this.getBond(cycle[i], cycle[j])) {
+            hasChord = true;
+            break;
+          }
+        }
+        if (hasChord) break;
+      }
+      if (!hasChord) minimalRings.push(cycle);
+    }
+    return minimalRings;
+  }
+
+  // Kekulize aromatic rings: set alternating single/double bonds
+  kekulize() {
+    const rings = this.findRings();
+    for (const ring of rings) {
+      if (ring.length % 2 !== 0) continue;
+      // Only kekulize rings where all atoms are marked aromatic
+      const allAromatic = ring.every(id => {
+        const a = this.atoms.get(id);
+        return a && a.aromatic;
+      });
+      if (!allAromatic) continue;
+      // Skip if already kekulized (has double bonds)
+      let hasDouble = false;
+      for (let i = 0; i < ring.length; i++) {
+        const j = (i + 1) % ring.length;
+        if (this.getBondType(ring[i], ring[j]) === 'double') {
+          hasDouble = true;
+          break;
+        }
+      }
+      if (hasDouble) continue;
+      // Set alternating single/double bonds
+      for (let i = 0; i < ring.length - 1; i += 2) {
+        this.setBondType(ring[i], ring[(i + 1) % ring.length], 'double');
+      }
+    }
+    return this;
   }
 
   // Normalize molecular structure: uniform bond lengths, proper angles
@@ -341,77 +390,144 @@ class Molecule {
     if (this.atoms.size === 0) return this;
     const BL = 72; // standard bond length in pixels
 
-    // Find all cycles
-    const allRings = this.findRings();
-    const ringMems = new Set();
-    // Keep largest ring per atom
-    const ringAtoms = new Map(); // atomId -> ring array
-    const processed = new Set();
-    for (const ring of allRings) {
-      const key = [...ring].sort().join(',');
-      if (processed.has(key)) continue;
-      processed.add(key);
-      for (const id of ring) {
-        if (!ringAtoms.has(id) || ringAtoms.get(id).length < ring.length) {
-          ringAtoms.set(id, ring);
-        }
-        ringMems.add(id);
-      }
-    }
-
-    // Group ring members into distinct cycles
-    const cycles = [];
-    const used = new Set();
-    for (const ring of allRings) {
-      const key = [...ring].sort().join(',');
-      if (used.has(key)) continue;
-      used.add(key);
-      // Only keep cycles with all atoms currently in ringMems
-      const allIn = ring.every(id => ringAtoms.get(id) === ring);
-      if (allIn) cycles.push(ring);
-      else {
-        // Ring with mixed membership — keep as-is
-        for (const id of ring) ringMems.add(id);
-      }
-    }
+    // Get all minimal chordless cycles (SSSR), largest first
+    const cycles = this.findRings();
+    cycles.sort((a, b) => b.length - a.length);
 
     const placed = new Set();
     const positions = new Map(); // atomId -> {x, y}
 
-    // Phase 1: Place ring atoms as regular polygons
-    let ringCounter = 0;
-    for (const cycle of cycles) {
-      const orderedCycle = this._orderRingAtoms(cycle);
-      const n = orderedCycle.length;
-      let r;
-      if (n <= 3) r = BL * 0.58;
-      else if (n === 4) r = BL * 0.71;
-      else if (n === 5) r = BL * 0.85;
-      else if (n === 6) r = BL;
-      else r = BL * 1.1;
+    // Phase 1: Smart fused ring placement with shared-edge anchoring
+    const placedRings = []; // { cycle, center }
+    const remainingCycles = cycles.map(c => this._orderRingAtoms(c));
 
-      const cx = 400 + (ringCounter % 4) * 200;
-      const cy = 300 + Math.floor(ringCounter / 4) * 200;
-      ringCounter++;
+    if (remainingCycles.length > 0) {
+      // Draw the first ring as a regular polygon
+      const firstCycle = remainingCycles.shift();
+      const n = firstCycle.length;
+      const r = BL / (2 * Math.sin(Math.PI / n));
+      const cx = 400, cy = 300;
+
       for (let i = 0; i < n; i++) {
         const angle = (Math.PI * 2 / n) * i - Math.PI / 2;
-        const id = orderedCycle[i];
-        positions.set(id, { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
-        placed.add(id);
+        positions.set(firstCycle[i], { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+        placed.add(firstCycle[i]);
+      }
+      placedRings.push({ cycle: firstCycle, center: { x: cx, y: cy } });
+
+      // Iteratively attach remaining rings via shared edges
+      let progress = true;
+      while (remainingCycles.length > 0 && progress) {
+        progress = false;
+
+        for (let idx = 0; idx < remainingCycles.length; idx++) {
+          const cycle = remainingCycles[idx];
+          const sharedIndices = [];
+          for (let i = 0; i < cycle.length; i++) {
+            if (placed.has(cycle[i])) sharedIndices.push(i);
+          }
+
+          if (sharedIndices.length >= 2) {
+            // Find an adjacent pair (shared edge) in the cycle
+            let pair = null;
+            const clen = cycle.length;
+            for (let i = 0; i < sharedIndices.length; i++) {
+              for (let j = i + 1; j < sharedIndices.length; j++) {
+                const a = sharedIndices[i], b = sharedIndices[j];
+                if (Math.abs(a - b) === 1 || Math.abs(a - b) === clen - 1) {
+                  pair = [a, b]; break;
+                }
+              }
+              if (pair) break;
+            }
+
+            if (pair) {
+              const id1 = cycle[pair[0]], id2 = cycle[pair[1]];
+              const p1 = positions.get(id1), p2 = positions.get(id2);
+
+              // --- Topological Winding Alignment ---
+              // Reorder cycle so shared edge atoms are at indices 0 and 1
+              let ordered = [...cycle];
+              while (!(ordered[0] === id1 && ordered[1] === id2) &&
+                     !(ordered[0] === id2 && ordered[1] === id1)) {
+                ordered.push(ordered.shift());
+              }
+              // Ensure id1 is at index 0, id2 at index 1
+              if (ordered[0] !== id1) {
+                ordered.reverse();
+                while (ordered[0] !== id1) ordered.push(ordered.shift());
+              }
+
+              // Find the parent ring that owns this shared edge
+              let parentRing = placedRings.find(pr =>
+                pr.cycle.includes(id1) && pr.cycle.includes(id2));
+              if (!parentRing) parentRing = placedRings[0];
+
+              // Midpoint of shared edge
+              const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+
+              // Outward normal from parent ring center → edge midpoint
+              let ox = mx - parentRing.center.x, oy = my - parentRing.center.y;
+              let len = Math.hypot(ox, oy);
+              if (len < 0.1) { ox = 1; oy = 0; len = 1; }
+              ox /= len; oy /= len;
+
+              const clen = cycle.length;
+              const h = (BL / 2) / Math.tan(Math.PI / clen);
+              const ncx = mx + ox * h, ncy = my + oy * h;
+              const ringRadius = BL / (2 * Math.sin(Math.PI / clen));
+
+              const a1 = Math.atan2(p1.y - ncy, p1.x - ncx);
+              const a2 = Math.atan2(p2.y - ncy, p2.x - ncx);
+              let diff = a2 - a1;
+              while (diff < -Math.PI) diff += Math.PI * 2;
+              while (diff > Math.PI) diff -= Math.PI * 2;
+              const dirSign = diff > 0 ? 1 : -1;
+              const exactStep = dirSign * (Math.PI * 2) / clen;
+
+              // Place unplaced atoms in topological order (i = 2..n-1)
+              for (let i = 2; i < clen; i++) {
+                const id = ordered[i];
+                if (!placed.has(id)) {
+                  const angle = a1 + i * exactStep;
+                  positions.set(id, {
+                    x: ncx + ringRadius * Math.cos(angle),
+                    y: ncy + ringRadius * Math.sin(angle)
+                  });
+                  placed.add(id);
+                }
+              }
+
+              placedRings.push({ cycle, center: { x: ncx, y: ncy } });
+              remainingCycles.splice(idx, 1);
+              progress = true;
+              break;
+            }
+          }
+        }
+
+        // Fallback for isolated rings (not connected to any placed ring)
+        if (!progress && remainingCycles.length > 0) {
+          const isoCycle = remainingCycles.shift();
+          const n = isoCycle.length;
+          const r = BL / (2 * Math.sin(Math.PI / n));
+          const cx = 400 + (placedRings.length % 4) * 200;
+          const cy = 300 + Math.floor(placedRings.length / 4) * 200;
+          for (let i = 0; i < n; i++) {
+            const angle = (Math.PI * 2 / n) * i - Math.PI / 2;
+            positions.set(isoCycle[i], { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+            placed.add(isoCycle[i]);
+          }
+          placedRings.push({ cycle: isoCycle, center: { x: cx, y: cy } });
+          progress = true;
+        }
       }
     }
 
-    // Phase 2: BFS from placed atoms to place chains
-    // Compute ring centers so ring atoms can initialize dirAngle to the outward bisector
+    // Build ringCenters map (for dirAngle calculation in Phase 2)
     const ringCenters = new Map();
-    for (const cycle of cycles) {
-      let sx = 0, sy = 0;
-      for (const id of cycle) {
-        const p = positions.get(id);
-        sx += p.x; sy += p.y;
-      }
-      const center = { x: sx / cycle.length, y: sy / cycle.length };
-      for (const id of cycle) ringCenters.set(id, center);
+    for (const pr of placedRings) {
+      for (const id of pr.cycle) ringCenters.set(id, pr.center);
     }
 
     const queue = [];
@@ -424,7 +540,7 @@ class Molecule {
       // For ring atoms, use the inward direction (atom -> ring center) so that
       // baseAngle + Math.PI places substituents along the outward bisector (120° geometry).
       const dirAngle = center ? Math.atan2(center.y - p.y, center.x - p.x) : 0;
-      queue.push({ id, parent: null, dirAngle, fromRing: true });
+      queue.push({ id, parent: null, dirAngle, fromRing: true, sign: 1 });
     }
 
     // If nothing placed yet (no rings), start from first atom
@@ -432,13 +548,13 @@ class Molecule {
       const firstId = this.atoms.keys().next().value;
       positions.set(firstId, { x: 400, y: 300 });
       placed.add(firstId);
-      queue.push({ id: firstId, parent: null, dirAngle: 0 });
+      queue.push({ id: firstId, parent: null, dirAngle: 0, sign: 1 });
     }
 
     const visited = new Set();
     // BFS: queue items include the direction FROM parent TO this node
     while (queue.length > 0) {
-      const { id, parent: pid, dirAngle, fromRing } = queue.shift();
+      const { id, parent: pid, dirAngle, fromRing, sign = 1 } = queue.shift();
       if (visited.has(id)) continue;
       visited.add(id);
 
@@ -502,17 +618,33 @@ class Molecule {
           }
         }
       } else {
-        // sp3: use zigzag pattern
         const deg = neigh.length;
-        if (deg === 1) {
-          angles = [baseAngle + Math.PI * 0.67]; // ~120° (2D projection of tetrahedral)
-        } else if (deg === 2) {
-          angles = [baseAngle + Math.PI * 0.6, baseAngle - Math.PI * 0.6];
-        } else if (deg === 3) {
-          angles = [baseAngle + Math.PI * 0.55, baseAngle - Math.PI * 0.55, baseAngle + Math.PI * 0.95];
+
+        if (fromRing) {
+          // Ring-attached sp3: extend along outward bisector (no zigzag)
+          if (deg === 1) {
+            angles = [baseAngle + Math.PI];
+          } else if (deg === 2) {
+            angles = [baseAngle + Math.PI + 0.5, baseAngle + Math.PI - 0.5];
+          } else if (deg === 3) {
+            angles = [baseAngle + Math.PI, baseAngle + Math.PI + 0.8, baseAngle + Math.PI - 0.8];
+          } else {
+            for (let i = 0; i < neigh.length; i++) {
+              angles.push(baseAngle + (Math.PI * 2 / neigh.length) * i);
+            }
+          }
         } else {
-          for (let i = 0; i < neigh.length; i++) {
-            angles.push(baseAngle + (Math.PI * 2 / neigh.length) * i);
+          // Chain sp3: use zigzag pattern with alternating sign
+          if (deg === 1) {
+            angles = [baseAngle + Math.PI + sign * (Math.PI / 3)];
+          } else if (deg === 2) {
+            angles = [baseAngle + Math.PI * 0.6, baseAngle - Math.PI * 0.6];
+          } else if (deg === 3) {
+            angles = [baseAngle + Math.PI * 0.55, baseAngle - Math.PI * 0.55, baseAngle + Math.PI * 0.95];
+          } else {
+            for (let i = 0; i < neigh.length; i++) {
+              angles.push(baseAngle + (Math.PI * 2 / neigh.length) * i);
+            }
           }
         }
       }
@@ -528,7 +660,7 @@ class Molecule {
         placed.add(nbId);
         // Direction from child back to parent (for next chain segments)
         const backAngle = Math.atan2(pos.y - ny, pos.x - nx);
-        queue.push({ id: nbId, parent: id, dirAngle: backAngle });
+        queue.push({ id: nbId, parent: id, dirAngle: backAngle, sign: -sign });
       }
     }
 
