@@ -51,6 +51,9 @@ class App {
     this.setViewMode('3d-ball');
     this.render();
     this.updateInfoPanel();
+
+    // Initialize RDKit.js (async, non-blocking)
+    window.initRdkit().catch(e => console.warn('RDKit init:', e));
   }
 
   // ---- View Mode ----
@@ -884,26 +887,20 @@ class App {
     this.showModalInner(html);
 
     setTimeout(() => {
-      // Render starting material
+      // Render starting material via RDKit
       const c0 = document.getElementById('synth-canvas-0');
       if (c0) {
         try {
-          new SkeletalFormula(SynthesisEngine.smilesToMolecule(path[0].precursors)).render(c0, {
-            padding: 20, bondLen: 36, lineWidth: 1.8, doubleGap: 2.8,
-            tripleGap: 4.5, showCarbonH: false, bgColor: '#f8f9fa',
-          });
+          window.rdkitRenderSmiles(path[0].precursors, c0, { padding: 20, bondLineWidth: 1.8 });
         } catch(e) { c0.getContext('2d').fillText(path[0].precursors, 10, 100); }
       }
 
-      // Render each step's product
+      // Render each step's product via RDKit
       path.forEach((step, idx) => {
         const canvas = document.getElementById(`synth-canvas-${idx + 1}`);
         if (!canvas) return;
         try {
-          new SkeletalFormula(SynthesisEngine.smilesToMolecule(step.product)).render(canvas, {
-            padding: 20, bondLen: 36, lineWidth: 1.8, doubleGap: 2.8,
-            tripleGap: 4.5, showCarbonH: false, bgColor: '#f8f9fa',
-          });
+          window.rdkitRenderSmiles(step.product, canvas, { padding: 20, bondLineWidth: 1.8 });
         } catch(e) { canvas.getContext('2d').fillText(step.product, 10, 100); }
       });
     }, 100);

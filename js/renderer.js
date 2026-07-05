@@ -14,7 +14,7 @@ const VDW_RADII = {
 };
 
 // ==================== 2D THUMBNAIL (TRUE SKELETAL FORMULA) ====================
-// Delegates to the standalone SkeletalFormula renderer.
+// Uses RDKit.js for professional structure rendering
 function renderThumbnail(mol, canvas) {
   if (!mol || mol.isEmpty()) {
     const ctx = canvas.getContext('2d');
@@ -26,16 +26,13 @@ function renderThumbnail(mol, canvas) {
     return;
   }
   try {
-    new SkeletalFormula(mol).render(canvas, {
+    window.rdkitRenderMol(mol, canvas, {
       padding: 28,
-      lineWidth: 1.6,
-      doubleGap: 2.8,
-      tripleGap: 4.5,
-      showCarbonH: false,
-      bgColor: '#f8f9fa',
+      bondLineWidth: 1.6,
+      fontSize: 14,
     });
   } catch (e) {
-    console.error('SkeletalFormula render failed:', e);
+    console.error('RDKit thumbnail render failed:', e);
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#888';
