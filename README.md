@@ -1,6 +1,6 @@
 # OrganicChem Builder
 
-有机化学分子构建器 — 2D/3D 分子编辑器 + 合成路径推断。
+有机化学分子构建器
 
 ## 功能
 
@@ -11,7 +11,7 @@
 
 ## 使用
 
-浏览器打开 `index.html`（纯前端，无需构建工具）。合成推断功能需要 Python + RDKit：
+浏览器打开 `index.html`。合成推断功能需要 Python + RDKit：
 
 ```bash
 pip install rdkit-pypi
