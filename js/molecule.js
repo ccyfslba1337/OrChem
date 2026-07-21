@@ -332,28 +332,41 @@ class Molecule {
       const carbonNbrs = this.getNeighbors(id).filter(nb => this.atoms.get(nb)?.el === 'C').length;
       if (carbonNbrs === 1) add('aldehyde', '醛 -CHO');
       else if (carbonNbrs >= 2) add('ketone', '酮 C=O');
+      else add('ketone', '酮 C=O'); // generic carbonyl (e.g. urea, amide)
     }
 
-    // Alcohol: C bonded to OH, excluding carboxyl/ester carbonyl C
+    // Alcohol: C bonded to -OH (single-bonded O that has no other C neighbor = not bridging)
     for (const [id, a] of this.atoms) {
       if (a.el !== 'C' || carboxylCs.has(id) || esterCs.has(id)) continue;
       for (const nb of this.getNeighbors(id)) {
         const nbA = this.atoms.get(nb);
-        if (nbA && nbA.el === 'O' && this.getBondType(id, nb) === 'single') {
+        if (!nbA || nbA.el !== 'O' || this.getBondType(id, nb) !== 'single') continue;
+        // Exclude bridging O (ether/ester oxygen with another C neighbor)
+        const otherCs = this.getNeighbors(nb).filter(oid => {
+          const oa = this.atoms.get(oid);
+          return oa && oa.el === 'C' && oid !== id;
+        });
+        if (otherCs.length === 0) {
           add('alcohol', '醇 -OH');
           break;
         }
       }
     }
 
-    // Amine: N atom not attached to a carbonyl C (amide)
+    // Amine: any N atom not part of a nitro or amide-like group.
+    // (Urea NH₂ counts as amine; true amides can be added separately later.)
     for (const [id, a] of this.atoms) {
       if (a.el !== 'N') continue;
-      let isAmide = false;
-      for (const nb of this.getNeighbors(id)) {
-        if (carbonylCs.has(nb)) { isAmide = true; break; }
-      }
-      if (!isAmide) add('amine', '胺 -NH₂');
+      // Skip nitro N (has ≥2 double-bonded O)
+      const doubleOs = this.getNeighbors(id).filter(nb => {
+        const nbA = this.atoms.get(nb);
+        return nbA && nbA.el === 'O' && this.getBondType(id, nb) === 'double';
+      }).length;
+      if (doubleOs >= 2) continue;
+      // Skip tertiary/aromatic N with 3 covalent bonds (e.g. pyridine N)
+      // that are not attached to any H (no single bonds to non-O/C heavy atoms)
+      // — for now accept any non-nitro N as amine
+      add('amine', '胺 -NH₂');
     }
 
     // Nitro: N with at least two double-bonded O
