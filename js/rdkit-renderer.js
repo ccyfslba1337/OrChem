@@ -95,6 +95,7 @@ window.rdkitRenderSmiles = function rdkitRenderSmiles(smiles, canvas, options = 
 };
 
 // Render a Molecule instance to a Canvas (used by renderThumbnail)
+// Uses SMILES (spanning-tree-based, handles fused rings).
 window.rdkitRenderMol = function rdkitRenderMol(mol, canvas, options = {}) {
   const smiles = mol.toSmiles ? mol.toSmiles() : null;
   if (smiles) {

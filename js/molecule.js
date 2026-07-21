@@ -859,6 +859,8 @@ class Molecule {
   }
 
   // Compute 3D positions. Rings are placed as regular polygons in the XY plane.
+  // Fused rings are handled by placing the first ring, then attaching subsequent rings
+  // via shared-edge outward placement (same approach as normalizeStructure).
   // Non-ring atoms are placed via BFS with proper bond angles from ring anchors.
   compute3DPositions() {
     const pos3d = new Map();
@@ -866,71 +868,139 @@ class Molecule {
 
     const rings = this.findRings();
 
-    // Deduplicate rings: keep largest ring per atom
-    const atomRingMap = new Map();
-    for (const cycle of rings) {
-      for (const id of cycle) {
-        if (!atomRingMap.has(id) || atomRingMap.get(id).length < cycle.length) {
-          atomRingMap.set(id, cycle);
-        }
-      }
-    }
+    // Phase 1: Fused ring placement (same algorithm as normalizeStructure)
+    const sortedRings = [...rings].sort((a, b) => b.length - a.length);
+    const remainingCycles = sortedRings.map(c => this._orderRingAtoms(c));
+    const placed3d = new Set(); // atom IDs already placed in 3D
+    const placedRings = []; // { cycle, center }
 
-    // Collect distinct cycles (all atoms in cycle have it as primary ring)
-    const seenKeys = new Set();
-    const cycles = [];
-    for (const cycle of rings) {
-      const key = [...cycle].sort().join(',');
-      if (seenKeys.has(key)) continue;
-      if (cycle.every(id => atomRingMap.get(id) === cycle)) {
-        seenKeys.add(key);
-        cycles.push(cycle);
-      }
-    }
-
-    // Collect all ring atom IDs
-    const ringAtomSet = new Set();
-    for (const c of cycles) for (const id of c) ringAtomSet.add(id);
-
-    // Phase 1: Place each ring as a regular polygon in XY plane (Z=0)
-    let ringOffX = 0;
-    for (const cycle of cycles) {
-      const ordered = this._orderRingAtoms(cycle);
-      const n = ordered.length;
-
-      // Average bond length for this ring
+    if (remainingCycles.length > 0) {
+      // First ring as regular polygon
+      const firstCycle = remainingCycles.shift();
+      const n = firstCycle.length;
       let sumBL = 0, cntBL = 0;
       for (let i = 0; i < n; i++) {
-        const bl = getBondLength(this, ordered[i], ordered[(i + 1) % n]);
+        const bl = getBondLength(this, firstCycle[i], firstCycle[(i + 1) % n]);
         if (bl > 0) { sumBL += bl; cntBL++; }
       }
       const RING_BL = cntBL > 0 ? sumBL / cntBL : 1.38;
       const R = RING_BL / (2 * Math.sin(Math.PI / n));
-
-      // Offset multiple rings horizontally
-      const cx = ringOffX * 3.5;
-      ringOffX++;
-
       for (let i = 0; i < n; i++) {
         const a = (2 * Math.PI / n) * i - Math.PI / 2;
-        pos3d.set(ordered[i], new THREE.Vector3(cx + R * Math.cos(a), R * Math.sin(a), 0));
+        pos3d.set(firstCycle[i], new THREE.Vector3(R * Math.cos(a), R * Math.sin(a), 0));
+        placed3d.add(firstCycle[i]);
+      }
+      placedRings.push({ cycle: firstCycle, center: new THREE.Vector3(0, 0, 0) });
+
+      // Attach remaining rings via shared edges
+      let progress = true;
+      while (remainingCycles.length > 0 && progress) {
+        progress = false;
+        for (let idx = 0; idx < remainingCycles.length; idx++) {
+          const cycle = remainingCycles[idx];
+          const sharedIndices = [];
+          for (let i = 0; i < cycle.length; i++) {
+            if (placed3d.has(cycle[i])) sharedIndices.push(i);
+          }
+          if (sharedIndices.length >= 2) {
+            let pair = null;
+            const clen = cycle.length;
+            for (let i = 0; i < sharedIndices.length; i++) {
+              for (let j = i + 1; j < sharedIndices.length; j++) {
+                const a = sharedIndices[i], b = sharedIndices[j];
+                if (Math.abs(a - b) === 1 || Math.abs(a - b) === clen - 1) {
+                  pair = [a, b]; break;
+                }
+              }
+              if (pair) break;
+            }
+            if (!pair) { progress = true; remainingCycles.splice(idx, 1); break; }
+
+            const id1 = cycle[pair[0]], id2 = cycle[pair[1]];
+            const p1 = pos3d.get(id1), p2 = pos3d.get(id2);
+            if (!p1 || !p2) continue;
+
+            let ordered = [...cycle];
+            while (!(ordered[0] === id1 && ordered[1] === id2) &&
+                   !(ordered[0] === id2 && ordered[1] === id1)) {
+              ordered.push(ordered.shift());
+            }
+            if (ordered[0] !== id1) {
+              ordered.reverse();
+              while (ordered[0] !== id1) ordered.push(ordered.shift());
+            }
+
+            let parentRing = placedRings.find(pr =>
+              pr.cycle.includes(id1) && pr.cycle.includes(id2));
+            if (!parentRing) parentRing = placedRings[0];
+
+            const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+            let ox = mx - parentRing.center.x, oy = my - parentRing.center.y;
+            let len = Math.hypot(ox, oy);
+            if (len < 0.1) { ox = 1; oy = 0; len = 1; }
+            ox /= len; oy /= len;
+
+            const h = (RING_BL / 2) / Math.tan(Math.PI / clen);
+            const ncx = mx + ox * h, ncy = my + oy * h;
+            const ringRadius = RING_BL / (2 * Math.sin(Math.PI / clen));
+
+            const a1 = Math.atan2(p1.y - ncy, p1.x - ncx);
+            const a2 = Math.atan2(p2.y - ncy, p2.x - ncx);
+            let diff = a2 - a1;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            const dirSign = diff > 0 ? 1 : -1;
+            const exactStep = dirSign * (Math.PI * 2) / clen;
+
+            for (let i = 2; i < clen; i++) {
+              const id = ordered[i];
+              if (!placed3d.has(id)) {
+                const angle = a1 + i * exactStep;
+                pos3d.set(id, new THREE.Vector3(ncx + ringRadius * Math.cos(angle), ncy + ringRadius * Math.sin(angle), 0));
+                placed3d.add(id);
+              }
+            }
+            placedRings.push({ cycle, center: new THREE.Vector3(ncx, ncy, 0) });
+            remainingCycles.splice(idx, 1);
+            progress = true;
+            break;
+          }
+        }
+
+        // Fallback for isolated rings
+        if (!progress && remainingCycles.length > 0) {
+          const isoCycle = remainingCycles.shift();
+          const n = isoCycle.length;
+          let sumBL2 = 0, cntBL2 = 0;
+          for (let i = 0; i < n; i++) {
+            const bl = getBondLength(this, isoCycle[i], isoCycle[(i + 1) % n]);
+            if (bl > 0) { sumBL2 += bl; cntBL2++; }
+          }
+          const RING_BL2 = cntBL2 > 0 ? sumBL2 / cntBL2 : 1.38;
+          const R2 = RING_BL2 / (2 * Math.sin(Math.PI / n));
+          const cx = placedRings.length * 3.5;
+          for (let i = 0; i < n; i++) {
+            const a = (2 * Math.PI / n) * i - Math.PI / 2;
+            pos3d.set(isoCycle[i], new THREE.Vector3(cx + R2 * Math.cos(a), R2 * Math.sin(a), 0));
+            placed3d.add(isoCycle[i]);
+          }
+          placedRings.push({ cycle: isoCycle, center: new THREE.Vector3(cx, 0, 0) });
+          progress = true;
+        }
       }
     }
 
-    const placed = new Set(ringAtomSet);
-
-    // Phase 2: BFS from ring atoms outward to place non-ring substituents
+    // Phase 2: BFS outward from placed atoms to place non-ring substituents
     const queue = [];
-    if (ringAtomSet.size > 0) {
-      for (const id of ringAtomSet) {
+    if (placed3d.size > 0) {
+      for (const id of placed3d) {
         const pp = pos3d.get(id);
-        if (!pp) continue;
-        queue.push({ id, pp, hyb: this.getHybridization(id) });
+        if (pp) queue.push({ id, pp, hyb: this.getHybridization(id) });
       }
     } else {
       const rootId = [...this.atoms.keys()][0];
       pos3d.set(rootId, new THREE.Vector3(0, 0, 0));
-      placed.add(rootId);
+      placed3d.add(rootId);
       queue.push({ id: rootId, pp: pos3d.get(rootId), hyb: this.getHybridization(rootId) });
     }
 
@@ -942,7 +1012,7 @@ class Molecule {
       visited.add(id);
 
       const allNbrs = this.getNeighbors(id);
-      const unplaced = allNbrs.filter(nb => !placed.has(nb));
+      const unplaced = allNbrs.filter(nb => !placed3d.has(nb));
       if (unplaced.length === 0) continue;
 
       const placedDirs = [];
@@ -984,7 +1054,7 @@ class Molecule {
         const nbId = unplaced[i];
         const bl = getBondLength(this, id, nbId);
         pos3d.set(nbId, new THREE.Vector3().copy(pp).addScaledVector(newDirs[i], bl));
-        placed.add(nbId);
+        placed3d.add(nbId);
         queue.push({ id: nbId, pp: pos3d.get(nbId), hyb: this.getHybridization(nbId) });
       }
 
@@ -998,7 +1068,7 @@ class Molecule {
         }
         if (best) {
           pos3d.set(unplaced[i], pp.clone().addScaledVector(best, 1.5));
-          placed.add(unplaced[i]);
+          placed3d.add(unplaced[i]);
           queue.push({ id: unplaced[i], pp: pos3d.get(unplaced[i]), hyb: this.getHybridization(unplaced[i]) });
         }
       }
@@ -1035,6 +1105,64 @@ class Molecule {
 
   isEmpty() {
     return this.atoms.size === 0;
+  }
+
+  /**
+   * Export molecule as V2000 MolBlock string.
+   * Uses atom (x, y) coords if available, otherwise sets them to 0.
+   * RDKit generates its own layout from the connection table so coordinates
+   * are mainly placeholders.
+   */
+  toMolBlock() {
+    const atomList = [...this.atoms.values()];
+    const nAtoms = atomList.length;
+    const nBonds = this.bonds.length;
+    if (nAtoms === 0) return '';
+
+    // Find coordinate bounds to normalize to ~10 range
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const a of atomList) {
+      if (a.x < minX) minX = a.x;
+      if (a.x > maxX) maxX = a.x;
+      if (a.y < minY) minY = a.y;
+      if (a.y > maxY) maxY = a.y;
+    }
+    const rangeX = Math.max(maxX - minX, 1);
+    const rangeY = Math.max(maxY - minY, 1);
+    const scale = 10 / Math.max(rangeX, rangeY);
+    const offX = minX, offY = minY;
+
+    const lines = [];
+    lines.push(' RDKit MolBlock\n');
+    lines.push('  Generated by OrChem\n');
+    lines.push('\n');
+    lines.push(
+      `${String(nAtoms).padStart(3)}${String(nBonds).padStart(3)}  0  0  0  0  0  0  0  0999 V2000\n`
+    );
+
+    // Atom block
+    const elIdx = {};
+    for (let i = 0; i < nAtoms; i++) {
+      const a = atomList[i];
+      elIdx[a.id] = i + 1; // 1-indexed
+      const x = a.x !== undefined ? (a.x - offX) * scale : 0;
+      const y = a.y !== undefined ? (a.y - offY) * scale : 0;
+      const zs = '    0.0000'; // 10 chars, no decimal ambiguity
+      lines.push(
+        `${x.toFixed(4).padStart(10)}${y.toFixed(4).padStart(10)}${zs}${a.el.padStart(3)} 0  0  0  0  0  0  0  0  0\n`
+      );
+    }
+
+    // Bond block
+    for (const b of this.bonds) {
+      const i = elIdx[b.a], j = elIdx[b.b];
+      if (!i || !j) continue;
+      const bt = b.type === 'double' ? 2 : b.type === 'triple' ? 3 : 1;
+      lines.push(`  ${String(i).padStart(3)}${String(j).padStart(3)}  ${bt}  0  0  0  0\n`);
+    }
+
+    lines.push('M  END\n');
+    return lines.join('');
   }
 
   // ==================== SMILES ====================
@@ -1101,6 +1229,7 @@ class Molecule {
 
   /**
    * Export molecule as SMILES string.
+   * Uses a spanning-tree approach for reliable fused-ring handling.
    * FGs are expanded to explicit atoms before generating SMILES.
    */
   toSmiles() {
@@ -1109,135 +1238,168 @@ class Molecule {
 
     const heavyAtoms = [...mol.atoms.entries()].filter(([, a]) => a.el !== 'H');
     if (heavyAtoms.length === 0) return '';
+    const heavyIds = heavyAtoms.map(([id]) => id);
+    const heavySet = new Set(heavyIds);
 
-    const visited = new Set();
-    const ringOpen = {}; // ring key -> number (rings currently open, waiting for closure)
-    const openedRings = new Set(); // ring keys that have been opened
+    // Step 1: Find all rings, pick one closure edge per ring.
+    // A closure edge is the edge (a,b) of the ring whose sorted pair sorts
+    // lexicographically last — this keeps the spanning tree contiguous.
+    const rings = (mol.findRings ? mol.findRings() : []);
+    const closureEdgeSet = new Set(); // "min,max" strings
+    for (const r of rings) {
+      const clen = r.length;
+      // pick edge that is "farthest" in the atom-ID sense
+      let bestKey = '', bestVal = -1;
+      for (let i = 0; i < clen; i++) {
+        const a = r[i], b = r[(i + 1) % clen];
+        const mn = Math.min(a, b), mx = Math.max(a, b);
+        const val = mx - mn; // prefer edge with larger gap (will be "far" in DFS order)
+        const key = mn + ',' + mx;
+        if (val > bestVal) { bestVal = val; bestKey = key; }
+      }
+      if (bestKey) closureEdgeSet.add(bestKey);
+    }
+
+    // Step 2: Build a spanning tree (DFS) using only non-closure edges.
+    // At the same time, collect ring-closure info: for each closure edge,
+    // note the two atom IDs and the bond type.
+    const treeAdj = new Map(); // atomId -> [neighborId]
+    for (const id of heavyIds) treeAdj.set(id, []);
+    const ringClosures = []; // {a, b, bondType, key}
+
+    const visitedTree = new Set();
+    function buildTree(atomId, parentId) {
+      if (visitedTree.has(atomId)) return;
+      visitedTree.add(atomId);
+      for (const nb of mol.getNeighbors(atomId)) {
+        if (nb === parentId) continue;
+        const na = mol.atoms.get(nb);
+        if (!na || na.el === 'H') continue;
+        if (!heavySet.has(nb)) continue;
+        const mn = Math.min(atomId, nb), mx = Math.max(atomId, nb);
+        const key = mn + ',' + mx;
+        if (closureEdgeSet.has(key)) continue; // skip closure edges — handled separately
+        if (!visitedTree.has(nb)) {
+          treeAdj.get(atomId).push(nb);
+          treeAdj.get(nb).push(atomId);
+          buildTree(nb, atomId);
+        }
+      }
+    }
+
+    // Build tree
+    let treeRoot = heavyIds[0];
+    for (const id of heavyIds) {
+      const a = mol.atoms.get(id);
+      if (a && a.el === 'C') { treeRoot = id; break; }
+    }
+    buildTree(treeRoot, null);
+    for (const id of heavyIds) {
+      if (!visitedTree.has(id)) buildTree(id, null);
+    }
+
+    // Now add ring closures (edges NOT in the spanning tree)
+    for (const key of closureEdgeSet) {
+      const [mn, mx] = key.split(',').map(Number);
+      const bt = mol.getBondType(mn, mx) || 'single';
+      ringClosures.push({ a: mn, b: mx, bondType: bt, key });
+    }
+
+    // Step 3: Assign ring closure numbers.
+    // A closure edge will output its number when visiting the first atom,
+    // and output it again (close) when visiting the second atom.
+    const ringNumMap = new Map(); // key -> ring num string
     let nextRingNum = 1;
-    let result = '';
+    for (const rc of ringClosures) {
+      if (!ringNumMap.has(rc.key)) {
+        ringNumMap.set(rc.key, nextRingNum < 10 ? String(nextRingNum) : '%' + nextRingNum);
+        nextRingNum++;
+      }
+    }
 
+    // Step 4: DFS on the spanning tree, outputting SMILES.
     const bareEls = ['C', 'O', 'N', 'S', 'P', 'F', 'I', 'B'];
+    const result = [];
+    const visited = new Set();
 
-    // Pre-compute rings so that we don't treat two ring neighbors of one atom
-    // as independent branches (which would create spurious fused/bridged structures).
-    const rings = mol.findRings ? mol.findRings() : [];
-    const ringAtomSet = new Set();
-    for (const r of rings) for (const id of r) ringAtomSet.add(id);
-    function shareRing(a, b) {
-      return rings.some(r => r.includes(a) && r.includes(b));
-    }
-    function ringKey(r) {
-      return [...r].sort((x, y) => x - y).join(',');
-    }
-
-    function dfs(atomId, parentId) {
+    function dfsSMILES(atomId, parentId) {
       if (visited.has(atomId)) return;
       visited.add(atomId);
       const a = mol.atoms.get(atomId);
       if (!a) return;
 
-      // Output atom label
-      if (bareEls.includes(a.el)) {
-        result += a.el;
-      } else {
-        result += '[' + a.el + ']';
-      }
+      // Atom label
+      if (bareEls.includes(a.el)) result.push(a.el);
+      else result.push('[' + a.el + ']');
 
-      const nbrs = mol.getNeighbors(atomId)
-        .filter(nb => mol.atoms.get(nb)?.el !== 'H');
-
-      // Ring handling: open any unopened ring that contains this atom.
-      // The matching closure will be emitted when we later revisit a ring neighbor.
-      for (const r of rings) {
-        if (r.includes(atomId)) {
-          const key = ringKey(r);
-          if (!openedRings.has(key)) {
-            const rn = nextRingNum++;
-            ringOpen[key] = rn;
-            openedRings.add(key);
-            result += (rn < 10 ? String(rn) : '%' + rn);
-          }
+      // Open ring closures whose other atom hasn't been visited yet
+      const opens = [], closes = [];
+      for (const rc of ringClosures) {
+        if (rc.a === atomId || rc.b === atomId) {
+          const other = rc.a === atomId ? rc.b : rc.a;
+          const rn = ringNumMap.get(rc.key);
+          if (!rn) continue;
+          if (!visited.has(other)) opens.push({ other, rn, bt: rc.bondType });
+          else closes.push({ other, rn, bt: rc.bondType });
         }
       }
 
-      // Ring closures: connect back to already-visited non-parent neighbors
-      // that share a ring with this atom.
-      for (const nb of nbrs) {
-        if (nb === parentId || !visited.has(nb)) continue;
-        for (const r of rings) {
-          if (r.includes(atomId) && r.includes(nb)) {
-            const key = ringKey(r);
-            if (ringOpen[key] !== undefined) {
-              const bt = mol.getBondType(atomId, nb);
-              if (bt === 'double') result += '=';
-              else if (bt === 'triple') result += '#';
-              result += (ringOpen[key] < 10 ? String(ringOpen[key]) : '%' + ringOpen[key]);
-              delete ringOpen[key];
-            }
-          }
-        }
+      for (const op of opens) {
+        if (op.bt === 'double') result.push('=');
+        else if (op.bt === 'triple') result.push('#');
+        result.push(op.rn);
       }
 
-      // Tree edges to unvisited neighbors
-      let remaining = nbrs.filter(nb => nb !== parentId && !visited.has(nb));
-      if (remaining.length === 0) return;
+      // Tree children (spanning tree adjacency minus parent)
+      const children = (treeAdj.get(atomId) || []).filter(nb => nb !== parentId);
 
-      // If this atom is part of a ring, do not treat multiple ring neighbors as
-      // separate branches. Keep only one ring neighbor as a tree edge; the others
-      // will be reached through ring closures.
-      if (ringAtomSet.has(atomId) && remaining.length > 1) {
-        const ringNbrs = remaining.filter(nb => shareRing(atomId, nb));
-        if (ringNbrs.length > 1) {
-          ringNbrs.sort((a, b) => a - b);
-          const keeper = ringNbrs[0];
-          remaining = remaining.filter(nb => nb === keeper || !ringNbrs.includes(nb));
-        }
-      }
-      if (remaining.length === 0) return;
-
-      // Sort: multiple bonds become branches first; single bond becomes main chain last.
-      // This yields conventional SMILES like CC(=O)O instead of CCO(=O).
-      remaining.sort((a, b) => {
+      // Sort children: by bond type (multiple bonds first), then by atom ID
+      children.sort((a, b) => {
+        const oa = mol.getBondType(atomId, a), ob = mol.getBondType(atomId, b);
         const order = (bt) => bt === 'triple' ? 3 : bt === 'double' ? 2 : 1;
-        return order(mol.getBondType(atomId, a)) - order(mol.getBondType(atomId, b));
+        const d = order(ob) - order(oa);
+        if (d !== 0) return d;
+        return a - b;
       });
 
-      // Branches first (attached to the current atom)
-      for (let i = 0; i < remaining.length - 1; i++) {
-        const nb = remaining[i];
-        result += '(';
+      // All children except last → branches (parentheses)
+      for (let i = 0; i < children.length - 1; i++) {
+        const nb = children[i];
         const bt = mol.getBondType(atomId, nb);
-        if (bt === 'double') result += '=';
-        else if (bt === 'triple') result += '#';
-        dfs(nb, atomId);
-        result += ')';
+        result.push('(');
+        if (bt === 'double') result.push('=');
+        else if (bt === 'triple') result.push('#');
+        dfsSMILES(nb, atomId);
+        result.push(')');
       }
 
-      // Main chain last (no parentheses)
-      const last = remaining[remaining.length - 1];
-      const bt1 = mol.getBondType(atomId, last);
-      if (bt1 === 'double') result += '=';
-      else if (bt1 === 'triple') result += '#';
-      dfs(last, atomId);
+      // Last child → main chain
+      if (children.length > 0) {
+        const nb = children[children.length - 1];
+        const bt = mol.getBondType(atomId, nb);
+        if (bt === 'double') result.push('=');
+        else if (bt === 'triple') result.push('#');
+        dfsSMILES(nb, atomId);
+      }
+
+      // Close ring closures whose other atom was already visited
+      for (const cl of closes) {
+        if (cl.bt === 'double') result.push('=');
+        else if (cl.bt === 'triple') result.push('#');
+        result.push(cl.rn);
+      }
     }
 
-    // Start from first carbon if available
-    let startId = heavyAtoms[0][0];
-    for (const [id, a] of mol.atoms) {
-      if (a.el === 'C') { startId = id; break; }
-    }
-
-    // Handle disconnected fragments by launching DFS from each unvisited heavy atom
-    const heavyIds = heavyAtoms.map(([id]) => id);
+    // Launch DFS for each disconnected fragment
     let firstFragment = true;
     for (const id of heavyIds) {
       if (visited.has(id)) continue;
-      if (!firstFragment) result += '.';
+      if (!firstFragment) result.push('.');
       firstFragment = false;
-      dfs(id, null);
+      dfsSMILES(id, null);
     }
 
-    return result;
+    return result.join('');
   }
 
   /**
