@@ -269,35 +269,20 @@ class App {
       if (this.viewMode !== '2d') return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        // FG selected → remove that FG
-        if (this.renderer2D.selFgAtomId !== null && this.renderer2D.selFgIndex !== null) {
-          const a = this.mol.atoms.get(this.renderer2D.selFgAtomId);
-          if (a && a.fgs[this.renderer2D.selFgIndex] !== undefined) {
-            const fg = a.fgs[this.renderer2D.selFgIndex];
-            a.fgs.splice(this.renderer2D.selFgIndex, 1);
-            this.renderer2D.selFgAtomId = null;
-            this.renderer2D.selFgIndex = null;
-            // Ph: also remove the 6 ring atoms
-            if (fg === 'Ph') this._removePhRing(a.id);
-            this.saveState(); this.renderAll(); this.updateInfoPanel();
-            return;
-          }
+        // Clear FG highlight if set (FGs are real atoms now)
+        if (this.renderer2D.selFgAtomId !== null) {
+          this.renderer2D.selFgAtomId = null;
+          this.renderer2D.selFgIndex = null;
+          this.render2D();
+          return;
         }
         if (this.selId !== null) {
-          const a = this.mol.atoms.get(this.selId);
-          if (a && a.fgs.length > 0) {
-            const fg = a.fgs.pop();
-            // Ph: also remove the 6 ring atoms
-            if (fg === 'Ph') this._removePhRing(this.selId);
-          } else {
-            this.mol.removeAtom(this.selId);
-            this.selId = null; this.hoverId = null;
-          }
+          // FGs are real atoms now: simply delete the selected atom.
+          this.mol.removeAtom(this.selId);
+          this.selId = null; this.hoverId = null;
           this.saveState(); this.renderAll(); this.updateInfoPanel();
         }
       }
-      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); this.undo(); }
-      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); this.redo(); }
       if (e.key === 'Escape') {
         this.selId = null;
         this.renderer2D.selFgAtomId = null;
@@ -314,76 +299,98 @@ class App {
     if (!a) return;
     const c = FG_CONTRIB[fg];
     if (!c) return;
-    if (this.mol.getOccupiedValence(atomId) + c.v > (VALENCES[a.el] || 4)) {
+
+    // Valence cost of attaching this FG to the parent atom in the real-atom model.
+    const valenceCost = { OH: 1, NH2: 1, COOH: 1, CO: 2, CHO: 1, NO2: 1, CN: 3, Ph: 1 }[fg] || 1;
+    if (this.mol.getOccupiedValence(atomId) + valenceCost > (VALENCES[a.el] || 4)) {
       this.showToast('该原子价态已满');
       return;
     }
 
-    // Special handling for Ph: create actual benzene ring attached to the atom
-    if (fg === 'Ph') {
-      if (a.fgs.includes('Ph')) return;
-      // Compute free (stub) direction away from existing neighbors
-      const nbrs = this.mol.getNeighbors(atomId);
-      const usedAngles = [];
-      for (const nb of nbrs) {
-        const na = this.mol.atoms.get(nb);
-        if (na) usedAngles.push(Math.atan2(na.y - a.y, na.x - a.x));
-      }
-      let stubAngle;
-      if (usedAngles.length === 0) {
-        stubAngle = -Math.PI / 2; // upward
-      } else {
-        usedAngles.sort((x, y) => x - y);
-        let maxGap = 0, gapStart = usedAngles[0];
-        for (let i = 0; i < usedAngles.length; i++) {
-          const j = (i + 1) % usedAngles.length;
-          let gap = usedAngles[j] - usedAngles[i];
-          if (i === usedAngles.length - 1) gap = usedAngles[0] + 2 * Math.PI - usedAngles[i];
-          if (gap > maxGap) { maxGap = gap; gapStart = usedAngles[i]; }
-        }
-        stubAngle = gapStart + maxGap / 2;
-      }
+    // All FGs now create real atoms/bonds (like -Ph).
+    // Do NOT push to atom.fgs, otherwise _expandFG() / getAtomCounts()
+    // will expand/count the same group a second time.
+    const nbrs = this.mol.getNeighbors(atomId);
+    const usedAngles = nbrs.map(nb => {
+      const na = this.mol.atoms.get(nb);
+      return na ? Math.atan2(na.y - a.y, na.x - a.x) : 0;
+    });
 
-      // Build a benzene ring extending outward from the atom
-      const R = 48; // match placeFreeFG radius
-      const sA = stubAngle;
-      // Center of the hexagon is 2×R away from the parent atom along stubAngle
-      const cx = a.x + 2 * R * Math.cos(sA);
-      const cy = a.y + 2 * R * Math.sin(sA);
-      // Vertex 0 (attachment point) is at distance R from parent
-      // Remaining vertices go clockwise around the center
+    // Compute a free direction away from neighbors
+    function findFreeAngle() {
+      const sorted = [...usedAngles].sort((x, y) => x - y);
+      if (sorted.length === 0) return -Math.PI / 2;
+      let maxGap = 0, gapStart = sorted[0];
+      for (let i = 0; i < sorted.length; i++) {
+        const j = (i + 1) % sorted.length;
+        let gap = sorted[j] - sorted[i];
+        if (i === sorted.length - 1) gap = sorted[0] + 2 * Math.PI - sorted[i];
+        if (gap > maxGap) { maxGap = gap; gapStart = sorted[i]; }
+      }
+      return gapStart + maxGap / 2;
+    }
+
+    const freeAng = findFreeAngle();
+    const d = 60; // placement distance from parent atom
+
+    // ─── Create real atoms for each FG ───
+    if (fg === 'Ph') {
+      const R = 48, sA = freeAng;
+      const cx = a.x + 2 * R * Math.cos(sA), cy = a.y + 2 * R * Math.sin(sA);
       const ringAtoms = [];
       for (let i = 0; i < 6; i++) {
         const ang = sA + Math.PI + (Math.PI / 3) * i;
-        ringAtoms.push(this.mol.addAtom(
-          cx + R * Math.cos(ang),
-          cy + R * Math.sin(ang),
-          'C'
-        ));
+        ringAtoms.push(this.mol.addAtom(cx + R * Math.cos(ang), cy + R * Math.sin(ang), 'C'));
       }
-      // Connect ring with alternating bonds
       for (let i = 0; i < 6; i++) {
-        this.mol.addBond(ringAtoms[i].id, ringAtoms[(i + 1) % 6].id,
-          i % 2 === 0 ? 'double' : 'single');
+        this.mol.addBond(ringAtoms[i].id, ringAtoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
       }
-      // Connect parent to vertex 0
       this.mol.addBond(atomId, ringAtoms[0].id, 'single');
-      // Mark parent atom with Ph flag for valence tracking & identification
-      // (actual atoms handle rendering; fgs flag for identification)
-      if (!a.fgs.includes('Ph')) a.fgs.push('Ph');
       this.saveState(); this.updateInfoPanel(); this.renderAll();
       return;
     }
 
-    if (a.fgs.includes(fg)) return;
-    a.fgs.push(fg);
+    if (fg === 'OH') {
+      const o = this.mol.addAtom(a.x + d * Math.cos(freeAng), a.y + d * Math.sin(freeAng), 'O');
+      this.mol.addBond(atomId, o.id, 'single');
+    } else if (fg === 'NH2') {
+      const n = this.mol.addAtom(a.x + d * Math.cos(freeAng), a.y + d * Math.sin(freeAng), 'N');
+      this.mol.addBond(atomId, n.id, 'single');
+    } else if (fg === 'COOH') {
+      const cc = this.mol.addAtom(a.x + d * Math.cos(freeAng), a.y + d * Math.sin(freeAng), 'C');
+      this.mol.addBond(atomId, cc.id, 'single');
+      // C=O
+      const o1 = this.mol.addAtom(cc.x + d * 0.7 * Math.cos(freeAng + 0.7), cc.y + d * 0.7 * Math.sin(freeAng + 0.7), 'O');
+      this.mol.addBond(cc.id, o1.id, 'double');
+      // O-H
+      const o2 = this.mol.addAtom(cc.x + d * 0.7 * Math.cos(freeAng - 0.7), cc.y + d * 0.7 * Math.sin(freeAng - 0.7), 'O');
+      this.mol.addBond(cc.id, o2.id, 'single');
+    } else if (fg === 'CO') {
+      const o = this.mol.addAtom(a.x + d * Math.cos(freeAng), a.y + d * Math.sin(freeAng), 'O');
+      this.mol.addBond(atomId, o.id, 'double');
+    } else if (fg === 'CHO') {
+      const cc = this.mol.addAtom(a.x + d * Math.cos(freeAng), a.y + d * Math.sin(freeAng), 'C');
+      this.mol.addBond(atomId, cc.id, 'single');
+      const o = this.mol.addAtom(cc.x + d * 0.7 * Math.cos(freeAng + 0.6), cc.y + d * 0.7 * Math.sin(freeAng + 0.6), 'O');
+      this.mol.addBond(cc.id, o.id, 'double');
+    } else if (fg === 'NO2') {
+      const n = this.mol.addAtom(a.x + d * Math.cos(freeAng), a.y + d * Math.sin(freeAng), 'N');
+      this.mol.addBond(atomId, n.id, 'single');
+      const o1 = this.mol.addAtom(n.x + d * 0.5 * Math.cos(freeAng + 0.8), n.y + d * 0.5 * Math.sin(freeAng + 0.8), 'O');
+      this.mol.addBond(n.id, o1.id, 'double');
+      const o2 = this.mol.addAtom(n.x + d * 0.5 * Math.cos(freeAng - 0.8), n.y + d * 0.5 * Math.sin(freeAng - 0.8), 'O');
+      this.mol.addBond(n.id, o2.id, 'double');
+    } else if (fg === 'CN') {
+      const n = this.mol.addAtom(a.x + d * Math.cos(freeAng), a.y + d * Math.sin(freeAng), 'N');
+      this.mol.addBond(atomId, n.id, 'triple');
+    }
+
     this.saveState(); this.updateInfoPanel(); this.renderAll();
   }
 
   placeFreeFG(x, y, fg) {
     if (!FG_CONTRIB[fg] && fg !== 'Ph') return;
     if (fg === 'Ph') {
-      // Create actual benzene ring (6 C, alternating single/double bonds)
       const R = 48;
       const atoms = [];
       for (let i = 0; i < 6; i++) {
@@ -393,33 +400,43 @@ class App {
       for (let i = 0; i < 6; i++) {
         this.mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
       }
+    } else if (fg === 'CN') {
+      const c = this.mol.addAtom(x, y, 'C');
+      const n = this.mol.addAtom(x + 48, y, 'N');
+      this.mol.addBond(c.id, n.id, 'triple');
+    } else if (fg === 'NO2') {
+      const n = this.mol.addAtom(x, y, 'N');
+      const o1 = this.mol.addAtom(x + 36, y - 24, 'O');
+      const o2 = this.mol.addAtom(x + 36, y + 24, 'O');
+      this.mol.addBond(n.id, o1.id, 'double');
+      this.mol.addBond(n.id, o2.id, 'double');
     } else {
-      // Other FGs: create parent atom with FG tag
-      const parentEl = fg === 'NO2' ? 'N' : 'C';
-      const a = this.mol.addAtom(x, y, parentEl);
-      const c = FG_CONTRIB[fg];
-      if (c && this.mol.getOccupiedValence(a.id) + c.v <= (VALENCES[parentEl] || 4)) {
-        a.fgs.push(fg);
+      // Other FGs: create a parent C with the FG as real atoms
+      const parent = this.mol.addAtom(x, y, 'C');
+      if (fg === 'OH') {
+        const o = this.mol.addAtom(x + 48, y, 'O');
+        this.mol.addBond(parent.id, o.id, 'single');
+      } else if (fg === 'NH2') {
+        const n = this.mol.addAtom(x + 48, y, 'N');
+        this.mol.addBond(parent.id, n.id, 'single');
+      } else if (fg === 'COOH') {
+        const c2 = this.mol.addAtom(x + 48, y, 'C');
+        this.mol.addBond(parent.id, c2.id, 'single');
+        const o1 = this.mol.addAtom(x + 80, y - 24, 'O');
+        this.mol.addBond(c2.id, o1.id, 'double');
+        const o2 = this.mol.addAtom(x + 80, y + 24, 'O');
+        this.mol.addBond(c2.id, o2.id, 'single');
+      } else if (fg === 'CO') {
+        const o = this.mol.addAtom(x + 48, y, 'O');
+        this.mol.addBond(parent.id, o.id, 'double');
+      } else if (fg === 'CHO') {
+        const c2 = this.mol.addAtom(x + 48, y, 'C');
+        this.mol.addBond(parent.id, c2.id, 'single');
+        const o = this.mol.addAtom(x + 80, y, 'O');
+        this.mol.addBond(c2.id, o.id, 'double');
       }
     }
     this.saveState(); this.renderAll(); this.updateInfoPanel();
-  }
-
-  _removePhRing(parentId) {
-    // Find the 6-carbon benzene ring attached to parentId
-    const nbrs = this.mol.getNeighbors(parentId);
-    const allRings = this.mol.findRings();
-    for (const nb of nbrs) {
-      const na = this.mol.atoms.get(nb);
-      if (!na || na.el !== 'C') continue;
-      for (const cycle of allRings) {
-        if (cycle.length === 6 && cycle.includes(nb)) {
-          // Remove all atoms in this cycle
-          for (const id of cycle) this.mol.removeAtom(id);
-          return;
-        }
-      }
-    }
   }
 
   autoFillH() {
@@ -557,7 +574,6 @@ class App {
       this.mol = new Molecule();
       this.renderer2D.mol = this.mol;
       this.selId = null; this.hoverId = null;
-      this.history = []; this.historyIndex = -1;
       this.saveState(); this.renderAll(); this.updateInfoPanel();
       document.getElementById('canvasHint').style.opacity = '1';
     });
@@ -579,6 +595,13 @@ class App {
       this.showToast('结构已规范化');
     });
     document.getElementById('btnSynth').addEventListener('click', () => this.showSynthesis());
+
+    // Global keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); this.undo(); }
+      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); this.redo(); }
+    });
   }
 
   // ---- Templates ----
@@ -586,6 +609,16 @@ class App {
     document.querySelectorAll('[data-template]').forEach(b => {
       b.addEventListener('click', () => this.loadTemplate(b.dataset.template));
     });
+    // "更多" toggle
+    const moreBtn = document.getElementById('templateMoreBtn');
+    const moreArea = document.getElementById('templateMore');
+    if (moreBtn && moreArea) {
+      moreBtn.addEventListener('click', () => {
+        const open = moreArea.style.display !== 'none';
+        moreArea.style.display = open ? 'none' : 'flex';
+        moreBtn.textContent = open ? '更多 ▾' : '收起 ▴';
+      });
+    }
   }
 
   loadTemplate(name) {
@@ -596,13 +629,17 @@ class App {
     switch (name) {
       case 'ethanol':
         atoms = [mol.addAtom(cx, cy, 'C'), mol.addAtom(cx + s, cy, 'C')];
-        atoms[1].fgs.push('OH');
+        const ethOH = mol.addAtom(cx + s * 1.6, cy - s * 0.5, 'O');
         mol.addBond(atoms[0].id, atoms[1].id, 'single');
+        mol.addBond(atoms[1].id, ethOH.id, 'single');
         break;
       case 'acetic_acid':
         atoms = [mol.addAtom(cx, cy, 'C'), mol.addAtom(cx + s, cy, 'C')];
-        atoms[1].fgs.push('COOH');
+        const aaO1 = mol.addAtom(cx + s * 1.5, cy - s * 0.6, 'O');
+        const aaO2 = mol.addAtom(cx + s * 1.5, cy + s * 0.6, 'O');
         mol.addBond(atoms[0].id, atoms[1].id, 'single');
+        mol.addBond(atoms[1].id, aaO1.id, 'double');
+        mol.addBond(atoms[1].id, aaO2.id, 'single');
         break;
       case 'ethyl_acetate':
         // CH3-COO-CH2-CH3: ester -COO- (carbonyl C=O + ether O bridge)
@@ -614,8 +651,9 @@ class App {
           mol.addAtom(cx + s * 2, cy, 'C'),        // CH2 (alcohol side)
           mol.addAtom(cx + s * 3, cy, 'C'),        // CH3 (alcohol side)
         ];
-        atoms[1].fgs.push('CO'); // =O on carbonyl carbon
+        const eaCO = mol.addAtom(cx - s * 0.3, cy - s * 0.8, 'O');
         mol.addBond(atoms[0].id, atoms[1].id, 'single');
+        mol.addBond(atoms[1].id, eaCO.id, 'double');
         mol.addBond(atoms[1].id, atoms[2].id, 'single');
         mol.addBond(atoms[2].id, atoms[3].id, 'single');
         mol.addBond(atoms[3].id, atoms[4].id, 'single');
@@ -633,9 +671,10 @@ class App {
       }
       case 'acetone':
         atoms = [mol.addAtom(cx - s, cy, 'C'), mol.addAtom(cx, cy, 'C'), mol.addAtom(cx + s, cy, 'C')];
-        atoms[1].fgs.push('CO');
+        const acO = mol.addAtom(cx, cy - s * 0.8, 'O');
         mol.addBond(atoms[0].id, atoms[1].id, 'single');
         mol.addBond(atoms[1].id, atoms[2].id, 'single');
+        mol.addBond(atoms[1].id, acO.id, 'double');
         break;
       case 'phenol': {
         const r = 55;
@@ -646,7 +685,8 @@ class App {
         for (let i = 0; i < 6; i++) {
           mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
         }
-        atoms[0].fgs.push('OH');
+        const phenolO = mol.addAtom(cx, cy - r - s * 0.6, 'O');
+        mol.addBond(atoms[0].id, phenolO.id, 'single');
         break;
       }
       case 'glucose':
@@ -660,27 +700,268 @@ class App {
           const aldO = mol.addAtom(cx - s * 0.4, cy - s * 0.8, 'O');
           mol.addBond(atoms[0].id, aldO.id, 'double');
         }
-        // C2-C5: each has -OH
-        for (let i = 1; i <= 4; i++) atoms[i].fgs.push('OH');
-        // C6: -CH2OH => add -OH fg (2 implicit H from valence)
-        atoms[5].fgs.push('OH');
+        // C2-C5: each has -OH (real O atoms)
+        for (let i = 1; i <= 4; i++) {
+          const ohO = mol.addAtom(atoms[i].x, atoms[i].y - s * 0.7, 'O');
+          mol.addBond(atoms[i].id, ohO.id, 'single');
+        }
+        // C6: -CH2OH
+        {
+          const c6 = atoms[5];
+          const c6o = mol.addAtom(c6.x + s * 0.5, c6.y + s * 0.6, 'O');
+          mol.addBond(c6.id, c6o.id, 'single');
+        }
         // Chain bonds
         for (let i = 0; i < 5; i++) mol.addBond(atoms[i].id, atoms[i + 1].id, 'single');
         break;
       case 'alanine':
         // Alanine: CH3-CH(NH2)-COOH (α-amino acid)
-        // COOH has its own carbonyl C, connected to alpha C by single bond
         atoms = [
           mol.addAtom(cx, cy, 'C'),               // CH3
           mol.addAtom(cx + s, cy, 'C'),            // alpha C
           mol.addAtom(cx + s * 2, cy, 'C'),        // COOH carbonyl C
         ];
-        atoms[1].fgs.push('NH2');
-        atoms[2].fgs.push('CO');                   // =O
-        atoms[2].fgs.push('OH');                   // -OH
+        const alaN = mol.addAtom(cx + s, cy - s * 0.8, 'N');
+        const alaO1 = mol.addAtom(cx + s * 2.6, cy - s * 0.5, 'O');
+        const alaO2 = mol.addAtom(cx + s * 2.6, cy + s * 0.5, 'O');
         mol.addBond(atoms[0].id, atoms[1].id, 'single');
         mol.addBond(atoms[1].id, atoms[2].id, 'single');
+        mol.addBond(atoms[1].id, alaN.id, 'single');
+        mol.addBond(atoms[2].id, alaO1.id, 'double');
+        mol.addBond(atoms[2].id, alaO2.id, 'single');
         break;
+
+      // ─── 扩展模板 ───
+      case 'benzoic_acid': {
+        const r = 55;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
+        }
+        const baC = mol.addAtom(cx + r + s * 0.9, cy, 'C');
+        const baO1 = mol.addAtom(cx + r + s * 1.7, cy - s * 0.5, 'O');
+        const baO2 = mol.addAtom(cx + r + s * 1.7, cy + s * 0.5, 'O');
+        mol.addBond(atoms[0].id, baC.id, 'single');
+        mol.addBond(baC.id, baO1.id, 'double');
+        mol.addBond(baC.id, baO2.id, 'single');
+        break;
+      }
+      case 'benzaldehyde': {
+        const r = 55;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
+        }
+        const bzC = mol.addAtom(cx + r + s * 0.8, cy, 'C');
+        const bzO = mol.addAtom(cx + r + s * 1.5, cy, 'O');
+        mol.addBond(atoms[0].id, bzC.id, 'single');
+        mol.addBond(bzC.id, bzO.id, 'double');
+        break;
+      }
+      case 'nitrobenzene': {
+        const r = 55;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
+        }
+        const nbN = mol.addAtom(cx + r + s * 0.7, cy, 'N');
+        const nbO1 = mol.addAtom(cx + r + s * 1.3, cy - s * 0.45, 'O');
+        const nbO2 = mol.addAtom(cx + r + s * 1.3, cy + s * 0.45, 'O');
+        mol.addBond(atoms[0].id, nbN.id, 'single');
+        mol.addBond(nbN.id, nbO1.id, 'double');
+        mol.addBond(nbN.id, nbO2.id, 'double');
+        break;
+      }
+      case 'aniline': {
+        const r = 55;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
+        }
+        const anN = mol.addAtom(cx + r + s * 0.7, cy, 'N');
+        mol.addBond(atoms[0].id, anN.id, 'single');
+        break;
+      }
+      case 'salicylic_acid': {
+        // 2-hydroxybenzoic acid: benzene with -OH at C1 and -COOH at C0
+        const r = 55;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
+        }
+        // COOH at C0 (top)
+        const saC = mol.addAtom(cx, cy - r - s * 0.8, 'C');
+        const saO1 = mol.addAtom(cx - s * 0.4, cy - r - s * 1.4, 'O');
+        const saO2 = mol.addAtom(cx + s * 0.4, cy - r - s * 1.4, 'O');
+        mol.addBond(atoms[0].id, saC.id, 'single');
+        mol.addBond(saC.id, saO1.id, 'double');
+        mol.addBond(saC.id, saO2.id, 'single');
+        // OH at C1 (top-right)
+        const saOH = mol.addAtom(cx + r * 0.9 + s * 0.6, cy - r * 0.5 - s * 0.6, 'O');
+        mol.addBond(atoms[1].id, saOH.id, 'single');
+        break;
+      }
+      case 'aspirin': {
+        // Acetylsalicylic acid: salicylic acid with -CO-CH3 on OH
+        const r = 55;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
+        }
+        // COOH at C0 (top)
+        const aspC = mol.addAtom(cx, cy - r - s * 0.8, 'C');
+        const aspO1 = mol.addAtom(cx - s * 0.4, cy - r - s * 1.4, 'O');
+        const aspO2 = mol.addAtom(cx + s * 0.4, cy - r - s * 1.4, 'O');
+        mol.addBond(atoms[0].id, aspC.id, 'single');
+        mol.addBond(aspC.id, aspO1.id, 'double');
+        mol.addBond(aspC.id, aspO2.id, 'single');
+        // Acetyl group on C1: -O-C(=O)-CH3
+        const acetylO = mol.addAtom(cx + r * 1.8, cy - r * 0.6, 'O');
+        const acetylC = mol.addAtom(cx + r * 2.6, cy - r * 0.6, 'C');
+        const acetylMe = mol.addAtom(cx + r * 3.4, cy - r * 0.6, 'C');
+        const acetylCO = mol.addAtom(cx + r * 2.6, cy - r * 0.6 - s * 0.7, 'O');
+        mol.addBond(atoms[1].id, acetylO.id, 'single');
+        mol.addBond(acetylO.id, acetylC.id, 'single');
+        mol.addBond(acetylC.id, acetylCO.id, 'double');
+        mol.addBond(acetylC.id, acetylMe.id, 'single');
+        break;
+      }
+      case 'cyclohexane': {
+        const r = 60;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, 'single');
+        }
+        break;
+      }
+      case 'cyclohexene': {
+        const r = 60;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i < 2 ? (i === 0 ? 'double' : 'single') : 'single');
+        }
+        break;
+      }
+      case 'pyridine': {
+        const r = 55;
+        const rd3 = r * 0.866;
+        // Pyridine: N at top with single bonds; alternating C=C among the 5 C atoms
+        atoms = [mol.addAtom(cx, cy - r, 'N')];  // top
+        atoms.push(mol.addAtom(cx + rd3, cy - r * 0.5, 'C')); // top-right
+        atoms.push(mol.addAtom(cx + rd3, cy + r * 0.5, 'C')); // right
+        atoms.push(mol.addAtom(cx, cy + r, 'C'));              // bottom
+        atoms.push(mol.addAtom(cx - rd3, cy + r * 0.5, 'C')); // left
+        atoms.push(mol.addAtom(cx - rd3, cy - r * 0.5, 'C')); // top-left
+        // Bond pattern: N single to both adjacent C; C-C bonds alternate C=C
+        mol.addBond(atoms[0].id, atoms[1].id, 'single');   // N-C1 single
+        mol.addBond(atoms[1].id, atoms[2].id, 'double');   // C1=C2
+        mol.addBond(atoms[2].id, atoms[3].id, 'single');   // C2-C3
+        mol.addBond(atoms[3].id, atoms[4].id, 'double');   // C3=C4
+        mol.addBond(atoms[4].id, atoms[5].id, 'single');   // C4-C5
+        mol.addBond(atoms[5].id, atoms[0].id, 'single');   // C5-N single
+        break;
+      }
+      case 'lactic_acid':
+        // CH3-CHOH-COOH
+        atoms = [
+          mol.addAtom(cx - s, cy, 'C'),
+          mol.addAtom(cx, cy, 'C'),
+          mol.addAtom(cx + s, cy, 'C'),
+        ];
+        const laOH = mol.addAtom(cx, cy - s * 0.7, 'O');
+        const laO1 = mol.addAtom(cx + s * 1.6, cy - s * 0.5, 'O');
+        const laO2 = mol.addAtom(cx + s * 1.6, cy + s * 0.5, 'O');
+        mol.addBond(atoms[0].id, atoms[1].id, 'single');
+        mol.addBond(atoms[1].id, atoms[2].id, 'single');
+        mol.addBond(atoms[1].id, laOH.id, 'single');
+        mol.addBond(atoms[2].id, laO1.id, 'double');
+        mol.addBond(atoms[2].id, laO2.id, 'single');
+        break;
+      case 'glycerol':
+        // HOCH2-CHOH-CH2OH
+        atoms = [
+          mol.addAtom(cx - s, cy, 'C'),
+          mol.addAtom(cx, cy, 'C'),
+          mol.addAtom(cx + s, cy, 'C'),
+        ];
+        const glOH1 = mol.addAtom(cx - s, cy - s * 0.7, 'O');
+        const glOH2 = mol.addAtom(cx, cy - s * 0.7, 'O');
+        const glOH3 = mol.addAtom(cx + s, cy - s * 0.7, 'O');
+        mol.addBond(atoms[0].id, atoms[1].id, 'single');
+        mol.addBond(atoms[1].id, atoms[2].id, 'single');
+        mol.addBond(atoms[0].id, glOH1.id, 'single');
+        mol.addBond(atoms[1].id, glOH2.id, 'single');
+        mol.addBond(atoms[2].id, glOH3.id, 'single');
+        break;
+      case 'oxalic_acid':
+        // HOOC-COOH
+        atoms = [
+          mol.addAtom(cx - s * 0.5, cy, 'C'),
+          mol.addAtom(cx + s * 0.5, cy, 'C'),
+        ];
+        const oaO1 = mol.addAtom(cx - s * 0.5, cy - s * 0.8, 'O');
+        const oaO2 = mol.addAtom(cx - s * 0.5, cy + s * 0.8, 'O');
+        const oaO3 = mol.addAtom(cx + s * 0.5, cy - s * 0.8, 'O');
+        const oaO4 = mol.addAtom(cx + s * 0.5, cy + s * 0.8, 'O');
+        mol.addBond(atoms[0].id, atoms[1].id, 'single');
+        mol.addBond(atoms[0].id, oaO1.id, 'double');
+        mol.addBond(atoms[0].id, oaO2.id, 'single');
+        mol.addBond(atoms[1].id, oaO3.id, 'double');
+        mol.addBond(atoms[1].id, oaO4.id, 'single');
+        break;
+      case 'urea':
+        // (NH2)2C=O
+        atoms = [mol.addAtom(cx, cy, 'C')];
+        const ureaO = mol.addAtom(cx, cy - s * 0.7, 'O');
+        const ureaN1 = mol.addAtom(cx - s * 0.7, cy + s * 0.5, 'N');
+        const ureaN2 = mol.addAtom(cx + s * 0.7, cy + s * 0.5, 'N');
+        mol.addBond(atoms[0].id, ureaO.id, 'double');
+        mol.addBond(atoms[0].id, ureaN1.id, 'single');
+        mol.addBond(atoms[0].id, ureaN2.id, 'single');
+        break;
+      case 'acetophenone': {
+        // Ph-CO-CH3
+        const r = 55;
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * 2 / 6 * i - Math.PI / 2;
+          atoms.push(mol.addAtom(cx + r * Math.cos(a), cy + r * Math.sin(a), 'C'));
+        }
+        for (let i = 0; i < 6; i++) {
+          mol.addBond(atoms[i].id, atoms[(i + 1) % 6].id, i % 2 === 0 ? 'double' : 'single');
+        }
+        // Acetyl group on C0: C(=O)-CH3
+        const acylC = mol.addAtom(cx + r + s, cy, 'C');
+        const acylMe = mol.addAtom(cx + r + s * 2, cy, 'C');
+        const acylO = mol.addAtom(cx + r + s, cy - s * 0.7, 'O');
+        mol.addBond(atoms[0].id, acylC.id, 'single');
+        mol.addBond(acylC.id, acylO.id, 'double');
+        mol.addBond(acylC.id, acylMe.id, 'single');
+        break;
+      }
     }
 
     this.mol = mol;
@@ -795,15 +1076,14 @@ class App {
   }
 
   renderAll() {
+    const hint = document.getElementById('canvasHint');
+    if (hint) hint.style.opacity = this.mol.isEmpty() ? '1' : '0';
     if (this.viewMode === '2d') this.render2D();
     else this.render3D();
     this.updateThumbnail();
   }
 
   render() {
-    const hint = document.getElementById('canvasHint');
-    if (this.mol.isEmpty()) hint.style.opacity = '1';
-    else hint.style.opacity = '0';
     this.renderAll();
   }
 

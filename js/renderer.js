@@ -276,6 +276,8 @@ class Renderer3D {
     for(const [oid,a] of mol.atoms) {
       const pn=idMap.get(oid); if(pn===undefined) continue;
       for(const fg of a.fgs) {
+        // FGs are now real atoms; skip legacy fgs already expanded.
+        if (mol._fgAlreadyReal && mol._fgAlreadyReal(oid, fg)) continue;
         if(fg==='OH'){ const o=fullMol.addAtom(0,0,'O'); fgBonds.push({a:pn,b:o,type:'single'}); }
         else if(fg==='CHO'||fg==='CO'){ fgBonds.push({a:pn,b:fullMol.addAtom(0,0,'O'),type:'double'}); }
         else if(fg==='COOH'){ fgBonds.push({a:pn,b:fullMol.addAtom(0,0,'O'),type:'double'}); fgBonds.push({a:pn,b:fullMol.addAtom(0,0,'O'),type:'single'}); }
@@ -627,109 +629,11 @@ class Renderer2D {
   /** Render a full-structure FG at a given stub direction from the parent atom.
    *  Returns display data for hit testing: { fgIndex, pos: {x,y}, subAtoms: [{x,y,el}] }. */
   _renderFGStructure(atomX, atomY, freeAng, fgType, fgIndex, isSelected) {
-    const ctx = this.ctx;
+    // FGs are now rendered as real atoms & bonds (like -Ph).
+    // Return position data for hit testing only.
     const d = this.bondLen * this.scale * 1.0;
-    const cosA = Math.cos(freeAng), sinA = Math.sin(freeAng);
-    const ox = atomX + d * cosA, oy = atomY + d * sinA;
-    const sel = isSelected;
-    const hl = sel ? '#e74c3c' : null;
-
-    // FG structure definitions — bonds FIRST, then atoms on top
-    const fgs = {
-      OH: () => {
-        // C — O — H  (bent)
-        const hAng1 = freeAng + 0.9; // ~52° bend
-        const hx = ox + d * 0.6 * Math.cos(hAng1), hy = oy + d * 0.6 * Math.sin(hAng1);
-        this._drawBondLine(atomX, atomY, ox, oy, 'single', hl);
-        this._drawBondLine(ox, oy, hx, hy, 'single', hl);
-        this._drawAtomAt(ox, oy, 'O', sel);
-        this._drawAtomAt(hx, hy, 'H', sel);
-        return { pos: { x: ox, y: oy }, subAtoms: [{ x: hx, y: hy, el: 'H' }], el: 'O' };
-      },
-      NH2: () => {
-        // C — N  with H H
-        this._drawBondLine(atomX, atomY, ox, oy, 'single', hl);
-        const subAtoms = [];
-        for (const ha of [freeAng + 1.1, freeAng - 1.1]) {
-          const hx = ox + d * 0.55 * Math.cos(ha), hy = oy + d * 0.55 * Math.sin(ha);
-          this._drawBondLine(ox, oy, hx, hy, 'single', hl);
-          subAtoms.push({ x: hx, y: hy, el: 'H' });
-        }
-        this._drawAtomAt(ox, oy, 'N', sel);
-        for (const ha of [freeAng + 1.1, freeAng - 1.1]) {
-          const hx = ox + d * 0.55 * Math.cos(ha), hy = oy + d * 0.55 * Math.sin(ha);
-          this._drawAtomAt(hx, hy, 'H', sel);
-        }
-        return { pos: { x: ox, y: oy }, subAtoms, el: 'N' };
-      },
-      CO: () => {
-        // C == O  (double bond)
-        this._drawBondLine(atomX, atomY, ox, oy, 'double', hl);
-        this._drawAtomAt(ox, oy, 'O', sel);
-        return { pos: { x: ox, y: oy }, subAtoms: [], el: 'O' };
-      },
-      CHO: () => {
-        // C == O   and   C — H
-        const hAng2 = freeAng + Math.PI * 0.7;
-        const hx2 = atomX + d * 0.55 * Math.cos(hAng2), hy2 = atomY + d * 0.55 * Math.sin(hAng2);
-        this._drawBondLine(atomX, atomY, ox, oy, 'double', hl);
-        this._drawBondLine(atomX, atomY, hx2, hy2, 'single', hl);
-        this._drawAtomAt(ox, oy, 'O', sel);
-        this._drawAtomAt(hx2, hy2, 'H', sel);
-        return { pos: { x: ox, y: oy }, subAtoms: [{ x: hx2, y: hy2, el: 'H' }], el: 'O' };
-      },
-      COOH: () => {
-        // C == O  and  C — O — H
-        const oAng2 = freeAng + Math.PI * 0.7;
-        const ox2 = atomX + d * Math.cos(oAng2), oy2 = atomY + d * Math.sin(oAng2);
-        const hx2 = ox2 + d * 0.55 * Math.cos(oAng2 + 0.9);
-        const hy2 = oy2 + d * 0.55 * Math.sin(oAng2 + 0.9);
-        this._drawBondLine(atomX, atomY, ox, oy, 'double', hl);
-        this._drawBondLine(atomX, atomY, ox2, oy2, 'single', hl);
-        this._drawBondLine(ox2, oy2, hx2, hy2, 'single', hl);
-        this._drawAtomAt(ox, oy, 'O', sel);
-        this._drawAtomAt(ox2, oy2, 'O', sel);
-        this._drawAtomAt(hx2, hy2, 'H', sel);
-        return { pos: { x: ox, y: oy }, subAtoms: [{ x: ox2, y: oy2, el: 'O' }, { x: hx2, y: hy2, el: 'H' }], el: 'O' };
-      },
-      CN: () => {
-        // C ≡ N
-        this._drawBondLine(atomX, atomY, ox, oy, 'triple', hl);
-        this._drawAtomAt(ox, oy, 'N', sel);
-        return { pos: { x: ox, y: oy }, subAtoms: [], el: 'N' };
-      },
-      NO2: () => {
-        // C — N  with two =O
-        this._drawBondLine(atomX, atomY, ox, oy, 'single', hl);
-        const subAtoms = [];
-        for (const ha of [freeAng + 0.8, freeAng - 0.8]) {
-          const nox = ox + d * 0.55 * Math.cos(ha), noy = oy + d * 0.55 * Math.sin(ha);
-          this._drawBondLine(ox, oy, nox, noy, 'double', hl);
-          subAtoms.push({ x: nox, y: noy, el: 'O' });
-        }
-        this._drawAtomAt(ox, oy, 'N', sel);
-        for (const ha of [freeAng + 0.8, freeAng - 0.8]) {
-          const nox = ox + d * 0.55 * Math.cos(ha), noy = oy + d * 0.55 * Math.sin(ha);
-          this._drawAtomAt(nox, noy, 'O', sel);
-        }
-        return { pos: { x: ox, y: oy }, subAtoms, el: 'N' };
-      },
-      Ph: () => {
-        // Ph is now rendered as actual ring atoms (created by addFG). Skip all drawing.
-        return { pos: { x: atomX, y: atomY }, subAtoms: [], el: 'Ph' };
-      },
-    };
-
-    const fn = fgs[fgType];
-    if (fn) return fn();
-    // Unknown FG: just draw label
-    const label = fgType;
-    ctx.font = "bold 10px \"Times New Roman\", serif";
-    ctx.fillStyle = hl || '#c05515';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(label, ox, oy);
-    this._drawBondLine(atomX, atomY, ox, oy, 'single', hl);
-    return { pos: { x: ox, y: oy }, subAtoms: [], el: '?' };
+    const ox = atomX + d * Math.cos(freeAng), oy = atomY + d * Math.sin(freeAng);
+    return { pos: { x: ox, y: oy }, subAtoms: [], el: fgType };
   }
 
   _drawAtomAt(x, y, el, sel) {

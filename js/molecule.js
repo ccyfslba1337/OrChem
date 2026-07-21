@@ -111,6 +111,53 @@ class Molecule {
     return this.bonds.filter(b => b.has(atomId)).length;
   }
 
+  /**
+   * Check whether a functional group attached to atomId is already
+   * represented by real atoms/bonds. Used to avoid double-counting
+   * when the molecule has been migrated from the legacy `atom.fgs`
+   * representation to explicit atoms.
+   */
+  _fgAlreadyReal(atomId, fg) {
+    const a = this.atoms.get(atomId);
+    if (!a) return false;
+    const nbrs = this.getNeighbors(atomId);
+    const hasElBond = (el, type) => nbrs.some(id => {
+      const na = this.atoms.get(id);
+      return na && na.el === el && this.getBondType(atomId, id) === type;
+    });
+    if (fg === 'OH' || fg === 'NH2') {
+      return hasElBond(fg === 'OH' ? 'O' : 'N', 'single');
+    }
+    if (fg === 'CO' || fg === 'CHO') {
+      return hasElBond('O', 'double');
+    }
+    if (fg === 'COOH') {
+      return hasElBond('O', 'double') && hasElBond('O', 'single');
+    }
+    if (fg === 'CN') {
+      return hasElBond('N', 'triple');
+    }
+    if (fg === 'NO2') {
+      return nbrs.some(id => {
+        const na = this.atoms.get(id);
+        if (!na || na.el !== 'N') return false;
+        const oCount = this.getNeighbors(id).filter(oid => {
+          const oa = this.atoms.get(oid);
+          return oa && oa.el === 'O' && this.getBondType(id, oid) === 'double';
+        }).length;
+        return oCount >= 2;
+      });
+    }
+    if (fg === 'Ph') {
+      return nbrs.some(id => {
+        const na = this.atoms.get(id);
+        if (!na || na.el !== 'C') return false;
+        return this.findRings().some(r => r.length === 6 && r.includes(id));
+      });
+    }
+    return false;
+  }
+
   getOccupiedValence(atomId) {
     const a = this.atoms.get(atomId);
     if (!a) return 0;
@@ -122,6 +169,7 @@ class Molecule {
       else if (b.type === 'triple') v += 3;
     }
     for (const fg of a.fgs) {
+      if (this._fgAlreadyReal(atomId, fg)) continue;
       v += FG_CONTRIB[fg] ? FG_CONTRIB[fg].v : 1;
     }
     return v;
@@ -138,6 +186,7 @@ class Molecule {
     for (const [id, a] of this.atoms) {
       counts[a.el] = (counts[a.el] || 0) + 1;
       for (const fg of a.fgs) {
+        if (this._fgAlreadyReal(id, fg)) continue;
         if (!FG_CONTRIB[fg]) continue;
         for (const [el2, n] of Object.entries(FG_CONTRIB[fg].atoms)) {
           counts[el2] = (counts[el2] || 0) + n;
@@ -221,21 +270,6 @@ class Molecule {
       fgSet.add(key);
     }
 
-    // Ester detection must come BEFORE ketone detection.
-    // A carbonyl C with a non-carbonyl O neighbour → ester (-COO-).
-    // (The =O from 'CO' is implicit; any explicit O neighbour is the ether bridge.)
-    const esterCs = new Set();
-    for (const [id, a] of this.atoms) {
-      if (!a.fgs.includes('CO')) continue;
-      for (const nb of this.getNeighbors(id)) {
-        const nbA = this.atoms.get(nb);
-        if (nbA && nbA.el === 'O') {
-          add('ester', '酯 -COO-');
-          esterCs.add(id);
-        }
-      }
-    }
-
     // Detect aromatic rings: rings where ALL C-C bonds are conjugated (single/double alternating
     // or all identical in the ring). For now, checks any ring with C=C inside it.
     const rings = this.findRings();
@@ -254,16 +288,97 @@ class Molecule {
       }
     }
 
+    // Functional groups are now explicit atoms/bonds.
+    // First classify carbonyl carbons (C=O).
+    const carbonylCs = new Set();   // any C=O
+    const carboxylCs = new Set();   // C(=O)-OH
+    const esterCs = new Set();      // C(=O)-O-
     for (const [id, a] of this.atoms) {
-      if (a.el === 'C' && a.fgs.includes('OH'))   { add('alcohol',        '醇 -OH'); }
-      if (a.el === 'C' && a.fgs.includes('CHO'))  { add('aldehyde',       '醛 -CHO'); }
-      if (a.el === 'C' && a.fgs.includes('COOH')) { add('carboxylic_acid','羧酸 -COOH'); }
-      if (a.fgs.includes('NH2')) { add('amine',  '胺 -NH₂'); }
-      if (a.fgs.includes('NO2')) { add('nitro',  '硝基 -NO₂'); }
-      if (a.fgs.includes('CN'))  { add('nitrile','腈 -CN'); }
-      if (a.el === 'C' && a.fgs.includes('CO') && !esterCs.has(id)) { add('ketone', '酮 C=O'); }
-      if (a.fgs.includes('Ph')) { add('phenyl',  '苯基 -Ph'); }
-      if (['F','Cl','Br','I'].includes(a.el))   { add('halo', '卤代 -' + a.el); }
+      if (a.el !== 'C') continue;
+      const nbrs = this.getNeighbors(id);
+      let hasDoubleO = false;
+      let hasSingleO = false;
+      for (const nb of nbrs) {
+        const nbA = this.atoms.get(nb);
+        const bt = this.getBondType(id, nb);
+        if (nbA && nbA.el === 'O' && bt === 'double') hasDoubleO = true;
+        if (nbA && nbA.el === 'O' && bt === 'single') hasSingleO = true;
+      }
+      if (!hasDoubleO) continue;
+      carbonylCs.add(id);
+      if (hasSingleO) {
+        // Carboxyl if the single-bonded O is -OH (not bridging to another C)
+        let ohO = false;
+        for (const nb of nbrs) {
+          const nbA = this.atoms.get(nb);
+          if (nbA && nbA.el === 'O' && this.getBondType(id, nb) === 'single') {
+            // O is -OH if it has no C neighbor besides this carbonyl C
+            const oNbrs = this.getNeighbors(nb).filter(oid => {
+              const oa = this.atoms.get(oid);
+              return oa && oa.el === 'C' && oid !== id;
+            });
+            if (oNbrs.length === 0) { ohO = true; break; }
+          }
+        }
+        if (ohO) carboxylCs.add(id);
+        else esterCs.add(id);
+      }
+    }
+
+    for (const id of carboxylCs) add('carboxylic_acid', '羧酸 -COOH');
+    for (const id of esterCs) add('ester', '酯 -COO-');
+    for (const id of carbonylCs) {
+      if (carboxylCs.has(id) || esterCs.has(id)) continue;
+      const carbonNbrs = this.getNeighbors(id).filter(nb => this.atoms.get(nb)?.el === 'C').length;
+      if (carbonNbrs === 1) add('aldehyde', '醛 -CHO');
+      else if (carbonNbrs >= 2) add('ketone', '酮 C=O');
+    }
+
+    // Alcohol: C bonded to OH, excluding carboxyl/ester carbonyl C
+    for (const [id, a] of this.atoms) {
+      if (a.el !== 'C' || carboxylCs.has(id) || esterCs.has(id)) continue;
+      for (const nb of this.getNeighbors(id)) {
+        const nbA = this.atoms.get(nb);
+        if (nbA && nbA.el === 'O' && this.getBondType(id, nb) === 'single') {
+          add('alcohol', '醇 -OH');
+          break;
+        }
+      }
+    }
+
+    // Amine: N atom not attached to a carbonyl C (amide)
+    for (const [id, a] of this.atoms) {
+      if (a.el !== 'N') continue;
+      let isAmide = false;
+      for (const nb of this.getNeighbors(id)) {
+        if (carbonylCs.has(nb)) { isAmide = true; break; }
+      }
+      if (!isAmide) add('amine', '胺 -NH₂');
+    }
+
+    // Nitro: N with at least two double-bonded O
+    for (const [id, a] of this.atoms) {
+      if (a.el !== 'N') continue;
+      const doubleOs = this.getNeighbors(id).filter(nb => {
+        const nbA = this.atoms.get(nb);
+        return nbA && nbA.el === 'O' && this.getBondType(id, nb) === 'double';
+      }).length;
+      if (doubleOs >= 2) add('nitro', '硝基 -NO₂');
+    }
+
+    // Nitrile: C≡N
+    for (const b of this.bonds) {
+      if (b.type === 'triple') {
+        const aA = this.atoms.get(b.a), aB = this.atoms.get(b.b);
+        if ((aA?.el === 'C' && aB?.el === 'N') || (aA?.el === 'N' && aB?.el === 'C')) {
+          add('nitrile', '腈 -CN');
+        }
+      }
+    }
+
+    // Halogens
+    for (const [id, a] of this.atoms) {
+      if (['F','Cl','Br','I'].includes(a.el)) add('halo', '卤代 -' + a.el);
     }
 
     let hasD = false, hasT = false;
@@ -300,7 +415,6 @@ class Molecule {
     }
     if (hasTriple) return 'sp';
     if (hasDouble) return 'sp2';
-    if (a.el === 'C' && a.fgs.includes('CO')) return 'sp2';
     if (a.aromatic) return 'sp2'; // aromatic carbon (parsed from lowercase 'c' in SMILES)
     return 'sp3';
   }
@@ -920,6 +1034,7 @@ class Molecule {
       for (const fg of a.fgs) {
         const contrib = FG_CONTRIB[fg];
         if (!contrib) continue;
+        if (m._fgAlreadyReal(id, fg)) continue;
         if (fg === 'CO') {
           toAdd.push({ parentId: id, type: 'CO', el: 'O', bondType: 'double' });
         } else if (fg === 'OH') {
@@ -965,12 +1080,6 @@ class Molecule {
       a.fgs = [];
     }
     for (const t of toAdd) {
-      if (t.parentId.startsWith && t.type === 'NO2') {
-        // Already handled above (NO2 creates its own N atom)
-      }
-    }
-    for (const t of toAdd) {
-      if (t.type === 'NO2') continue; // handled in the NO2 block above
       const newA = m.addAtom(0, 0, t.el);
       m.addBond(t.parentId, newA.id, t.bondType);
     }
