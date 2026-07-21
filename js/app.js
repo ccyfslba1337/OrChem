@@ -47,6 +47,7 @@ class App {
     this.setupButtonEvents();
     this.setupTemplateEvents();
     this.setupResize();
+    this.setupPanelToggle();
 
     this.setViewMode('3d-ball');
     this.render();
@@ -703,6 +704,48 @@ class App {
     new ResizeObserver(resize).observe(document.getElementById('canvasArea'));
   }
 
+  // ---- Panel Toggle (collapsible side panels) ----
+  setupPanelToggle() {
+    const sidebar = document.getElementById('sidebar');
+    const infoPanel = document.getElementById('infoPanel');
+    const sidebarToggle = document.getElementById('sidebarToggle');
+    const infoToggle = document.getElementById('infoToggle');
+
+    function collapse(p, btn) {
+      p.classList.add('collapsed');
+      btn.title = btn === sidebarToggle ? '展开侧栏' : '展开信息面板';
+    }
+    function expand(p, btn) {
+      p.classList.remove('collapsed');
+      btn.title = btn === sidebarToggle ? '折叠侧栏' : '折叠信息面板';
+    }
+    function toggle(p, btn) {
+      p.classList.contains('collapsed') ? expand(p, btn) : collapse(p, btn);
+      // Re-layout canvas after transition
+      setTimeout(() => {
+        const area = document.getElementById('canvasArea');
+        area.dispatchEvent(new Event('resize'));
+      }, 320);
+    }
+
+    sidebarToggle.addEventListener('click', () => toggle(sidebar, sidebarToggle));
+    infoToggle.addEventListener('click', () => toggle(infoPanel, infoToggle));
+
+    // Mobile: auto-collapse both panels on screens narrower than 768px
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+    const handleMedia = (e) => {
+      if (e.matches) {
+        collapse(sidebar, sidebarToggle);
+        collapse(infoPanel, infoToggle);
+      } else {
+        expand(sidebar, sidebarToggle);
+        expand(infoPanel, infoToggle);
+      }
+    };
+    mediaQuery.addEventListener('change', handleMedia);
+    handleMedia(mediaQuery); // init
+  }
+
   // ---- Undo/Redo ----
   saveState() {
     this.history = this.history.slice(0, this.historyIndex + 1);
@@ -866,16 +909,17 @@ class App {
     </div>`;
 
     path.forEach((step, idx) => {
+      const isLast = idx === path.length - 1;
       html += `<div class="synth-arrow">
         <span class="arrow-icon">↓</span>
-        <span class="arrow-label">${step.rule || '→'}</span>
-        ${step.reagent ? `<span class="arrow-reagent">试剂：${step.reagent}</span>` : ''}
+        ${step.reagent ? `<span class="arrow-reagent">${step.reagent}</span>` : ''}
         ${step.condition ? `<span class="arrow-condition">${step.condition}</span>` : ''}
       </div>
       <div class="synth-step">
         <div class="synth-canvas-wrap">
           <canvas id="synth-canvas-${idx + 1}" width="200" height="200"></canvas>
         </div>
+        <div class="synth-step-label">${isLast ? '目标产物' : '中间产物 ' + (idx + 1)}</div>
       </div>`;
     });
 

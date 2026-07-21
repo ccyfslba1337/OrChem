@@ -16,7 +16,8 @@
 
 <div class="app">
   <!-- Sidebar -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
+    <button class="panel-toggle sidebar-toggle" id="sidebarToggle" title="折叠侧栏"></button>
     <div class="sidebar-header">原子 / 元素</div>
     <div class="tool-group" id="elementTools">
       <button class="btn-tool active" data-tool="C">C</button>
@@ -99,6 +100,7 @@
 
   <!-- Info Panel -->
   <aside class="info-panel" id="infoPanel">
+    <button class="panel-toggle info-toggle" id="infoToggle" title="折叠信息面板"></button>
     <div class="panel-section">
       <div class="panel-title">分子结构</div>
       <div class="thumbnail-wrap"><canvas id="thumbCanvas" width="260" height="140"></canvas></div>

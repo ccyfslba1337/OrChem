@@ -262,6 +262,114 @@ RETRO_RULES = {
     "Alpha_Ketoacid_Decarboxylation": make_rxn(
         "[#6:1]-[C:2]=[O]>>[#6:1]-[C:2](=[O])-C(=O)[OH]"
     ),
+
+    # ─── 环氧化 (Epoxidation) ───
+    # 正向：烯烃 + RCO₃H → 环氧乙烷  (Prilezhaev反应)
+    # 逆向：环氧化合物 → 烯烃 + [O]
+    "Epoxidation": make_rxn(
+        "[C:1]=[C:2]>>[C:1]1-[C:2]-[O]1"
+    ),
+    # 正向：环氧乙烷 + H₂O/H⁺ → 邻二醇  (环氧水解开环)
+    "Epoxide_Hydrolysis": make_rxn(
+        "[C:1](-[OH])-[C:2](-[OH])>>[C:1]1-[C:2]-[O]1"
+    ),
+
+    # ─── 缩醛/缩酮 (Acetal/Ketal) ───
+    # 正向：醛 + 2ROH → 缩醛 + H₂O  (保护醛基)
+    "Acetal_Formation": make_rxn(
+        "[CH1:1]([O:2][#6])[O:3][#6]>>[CH1:1]=[O:2].[OH][#6].[OH:3][#6]"
+    ),
+    # 正向：酮 + 2ROH → 缩酮 + H₂O
+    "Ketal_Formation": make_rxn(
+        "[#6:1]-[C:2](-[O:3][#6])(-[O:4][#6])-[#6:5]>>[#6:1]-[C:2](=[O:3])-[#6:5].[OH][#6].[OH:4][#6]"
+    ),
+
+    # ─── 拜耳-维立格氧化 (Baeyer-Villiger) ───
+    # 正向：酮 + RCO₃H → 酯  (O插入到更富电子的基团侧)
+    "Baeyer_Villiger": make_rxn(
+        "[C:1](-[O:2]-[C:3])=[O]>>[C:1]-[C](=[O])-[O:2]-[C:3]"
+    ),
+
+    # ─── 克莱森缩合 (Claisen Condensation) ───
+    # 正向：2R-CH₂-COOEt + NaOEt → R-CH₂-CO-CHR-COOEt + EtOH
+    # 逆向：β-酮酸酯 → 2酯  (retro-Claisen)
+    "Claisen_Condensation": make_rxn(
+        "[#6:1]-[CH2:2]-[C:3](=[O:4])-[CH:5](-[#6:6])-[C:7](=[O:8])[O:9][#6]>>"
+        "[#6:1]-[CH2:2]-[C:3](=[O:8])[O:9][#6].[CH2:5]-[#6:6]-[C:7](=[O:4])[O:9][#6]"
+    ),
+
+    # ─── Hell-Volhard-Zelinsky 反应 ───
+    # 正向：R-CH₂-COOH + X₂/P → R-CHX-COOH + HX  (α-卤代酸)
+    # 逆向：α-卤代酸 → 羧酸 + X₂
+    "HVZ_Alpha_Halogenation": make_rxn(
+        "[#6:1]-[CH:2](-[Cl,Br,I])-[C:3](=[O])[OH]>>[#6:1]-[CH2:2]-[C:3](=[O])[OH]"
+    ),
+
+    # ─── Hofmann重排 ───
+    # 正向：RCONH₂ + Br₂/NaOH → RNH₂ + CO₂ + NaBr + H₂O
+    # 逆向：伯胺 → 酰胺  (少一个碳)
+    "Hofmann_Rearrangement": make_rxn(
+        "[#6:1]-[NH2:2]>>[#6:1]-[C](=[O])-[NH2:2]"
+    ),
+
+    # ─── Gabriel 胺合成 ───
+    # 正向：邻苯二甲酰亚胺钾盐 + R-X → N-烷基邻苯二甲酰亚胺 →(肼解)→ R-NH₂
+    "Gabriel_Synthesis": make_rxn(
+        "[#6:1]-[NH2]>>[#6:1]-[Cl,Br,I]"
+    ),
+
+    # ─── 臭氧化 (Ozonolysis) ───
+    # 正向：烯烃 + O₃ →(Me₂S/H₂O)→ 羰基化合物
+    # 逆向：羰基化合物 → 烯烃 + O₃  (还原氧化断键)
+    "Ozonolysis": make_rxn(
+        "[C:1]=[C:2]>>[C:1]=[O].[O]=[C:2]"
+    ),
+
+    # ─── Perkin 反应 ───
+    # 正向：Ar-CHO + (RCH₂CO)₂O/RCH₂COONa → Ar-CH=CR-COOH
+    # 逆向：肉桂酸衍生物 → 芳香醛 + 酸酐
+    "Perkin_Reaction": make_rxn(
+        "[c:1]-[C:2]=[C:3]-[C:4](=[O])[OH]>>[c:1]-[C:2]=[O].[CH2:3]-[C:4](=[O])[O]"
+    ),
+
+    # ─── Reformatsky 反应 ───
+    # 正向：α-卤代酯 + Zn + 醛/酮 → β-羟基酯
+    # 逆向：β-羟基酯 → α-卤代酯 + 醛/酮
+    "Reformatsky": make_rxn(
+        "[#6:1]-[C:2](=[O:3])[O:4][#6:5]>>[#6:1]-[C:2](=[O:3])[O:4][#6:5]"
+    ),
+
+    # ─── Pinacol重排 ───
+    # 正向：邻二醇 + H⁺ → 酮 (其中一个基团发生1,2-迁移)
+    "Pinacol_Rearrangement": make_rxn(
+        "[#6:1]-[C:2](=[O:3])-[#6:4]>>[#6:1]-[C:2](-[OH])-[C:4](-[OH])"
+    ),
+
+    # ─── 烯胺 (Enamine) ───
+    # 正向：醛/酮 + 二级胺 → 烯胺 + H₂O
+    "Enamine_Formation": make_rxn(
+        "[#6:1]-[C:2]=[C:3]-[N:4]>>[#6:1]-[CH2:2]-[C:3]=[O].[NH:4]"
+    ),
+
+    # ─── 酰胺/多肽 (Peptide bond) ───
+    # 正向：R-COOH + R'-NH₂ → R-CO-NH-R' + H₂O  (缩合)
+    "Amide_Condensation": make_rxn(
+        "[C:1](=[O:2])-[NH:3]-[#6:4]>>[C:1](=[O:2])[OH].[NH2:3]-[#6:4]"
+    ),
+
+    # ─── 异氰酸酯合成 ───
+    # 正向：RNH₂ + COCl₂ → R-N=C=O + 2HCl
+    # 逆向：异氰酸酯 → 胺 + 光气
+    "Isocyanate_Hydrolysis": make_rxn(
+        "[#6:1]-[NH2:2]>>[#6:1]-[N:2]=C=O"
+    ),
+
+    # ─── 磺酰胺 (Sulfonamide) ───
+    # 正向：R-SO₂Cl + NH₃ → R-SO₂NH₂ + HCl
+    # 逆向：磺酰胺 → 磺酰氯 + NH₃
+    "Sulfonamide_Hydrolysis": make_rxn(
+        "[c:1]-S(=O)(=O)[Cl]>>[c:1]-S(=O)(=O)[NH2]"
+    ),
 }
 
 # ===========================================================================
@@ -317,6 +425,23 @@ REAGENTS = {
     "Nitrile_Reduction":         "H₂ / Ni (或LiAlH₄)",
     "Amide_Dehydration":         "P₂O₅ / Δ",
     "Alpha_Ketoacid_Decarboxylation": "浓H₂SO₄ / Δ",
+    "Epoxidation":               "RCO₃H / CH₂Cl₂ (Prilezhaev反应)",
+    "Epoxide_Hydrolysis":        "H₂O / H⁺ 或 H₂O / OH⁻",
+    "Acetal_Formation":          "干燥HCl / ROH (保护醛基)",
+    "Ketal_Formation":           "干燥HCl / ROH (保护酮基)",
+    "Baeyer_Villiger":           "RCO₃H 或 H₂O₂/H⁺ (Baeyer-Villiger氧化)",
+    "Claisen_Condensation":      "NaOEt / EtOH / Δ (克莱森缩合)",
+    "HVZ_Alpha_Halogenation":    "X₂ / P (Hell-Volhard-Zelinsky)",
+    "Hofmann_Rearrangement":     "Br₂ / NaOH (Hofmann重排)",
+    "Gabriel_Synthesis":         "邻苯二甲酰亚胺钾 / 后肼解 (Gabriel合成)",
+    "Ozonolysis":                "O₃ / 后Me₂S还原 (臭氧化)",
+    "Perkin_Reaction":           "(RCH₂CO)₂O / RCH₂COONa / Δ (Perkin反应)",
+    "Reformatsky":               "Zn / 惰性溶剂 (Reformatsky反应)",
+    "Pinacol_Rearrangement":     "H⁺ / Δ (Pinacol重排)",
+    "Enamine_Formation":         "二级胺 / H⁺ (烯胺合成)",
+    "Amide_Condensation":        "DCC / 缩合 (酰胺键形成)",
+    "Isocyanate_Hydrolysis":     "COCl₂ / 碱 (异氰酸酯合成)",
+    "Sulfonamide_Hydrolysis":    "NH₃ (磺酰化)",
 }
 
 CONDITIONS = {
@@ -368,6 +493,23 @@ CONDITIONS = {
     "Nitrile_Reduction":         "腈的催化加氢还原制胺",
     "Amide_Dehydration":         "酰胺脱水制腈",
     "Alpha_Ketoacid_Decarboxylation": "α-酮酸脱羧反应",
+    "Epoxidation":               "烯烃环氧化 (Prilezhaev反应)",
+    "Epoxide_Hydrolysis":        "环氧乙烷酸性/碱性水解开环",
+    "Acetal_Formation":          "缩醛的形成 (醛基保护)",
+    "Ketal_Formation":           "缩酮的形成 (酮基保护)",
+    "Baeyer_Villiger":           "Baeyer-Villiger氧化重排 (酮→酯)",
+    "Claisen_Condensation":      "克莱森酯缩合 (增长碳链)",
+    "HVZ_Alpha_Halogenation":    "Hell-Volhard-Zelinsky α-卤代",
+    "Hofmann_Rearrangement":     "Hofmann重排 (酰胺降级制伯胺)",
+    "Gabriel_Synthesis":         "Gabriel伯胺合成法",
+    "Ozonolysis":                "烯烃臭氧化分解",
+    "Perkin_Reaction":           "Perkin反应 (芳香醛缩合制肉桂酸)",
+    "Reformatsky":               "Reformatsky反应 (β-羟基酯合成)",
+    "Pinacol_Rearrangement":     "Pinacol重排 (邻二醇→酮)",
+    "Enamine_Formation":         "烯胺的形成 (醛/酮+二级胺)",
+    "Amide_Condensation":        "酰胺缩合 (肽键形成)",
+    "Isocyanate_Hydrolysis":     "异氰酸酯水解制胺",
+    "Sulfonamide_Hydrolysis":    "磺酰胺水解",
 }
 
 # ===========================================================================
